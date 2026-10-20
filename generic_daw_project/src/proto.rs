@@ -360,7 +360,7 @@ impl Plugin {
 		}
 
 		let mut class_id = [0; 16];
-		for (byte, pair) in class_id.iter_mut().zip(digits.chunks_exact(2)) {
+		for (byte, pair) in class_id.iter_mut().zip(digits.as_chunks::<2>()) {
 			let digit = |c: u8| char::from(c).to_digit(16);
 			*byte = u8::try_from(digit(pair[0])? << 4 | digit(pair[1])?).ok()?;
 		}
