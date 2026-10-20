@@ -99,9 +99,10 @@ const fn vst3_words(subcategory: Subcategory) -> &'static [&'static str] {
 		Subcategory::Equalizer => &["EQ"],
 		Subcategory::PitchShifter => &["PitchShift"],
 		Subcategory::Distortion => &["Distortion"],
-		Subcategory::Compressor | Subcategory::Expander | Subcategory::Gate | Subcategory::Limiter => {
-			&["Dynamics"]
-		}
+		Subcategory::Compressor
+		| Subcategory::Expander
+		| Subcategory::Gate
+		| Subcategory::Limiter => &["Dynamics"],
 		Subcategory::Phaser | Subcategory::Flanger | Subcategory::Chorus | Subcategory::Tremolo => {
 			&["Modulation"]
 		}

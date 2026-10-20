@@ -66,7 +66,11 @@ impl AudioBuffers {
 			layout,
 			max_frames,
 			input_buses: buses(layout.input_buses, layout.main_input, &mut input_channels),
-			output_buses: buses(layout.output_buses, layout.main_output, &mut output_channels),
+			output_buses: buses(
+				layout.output_buses,
+				layout.main_output,
+				&mut output_channels,
+			),
 			input,
 			output,
 			_input_channels: input_channels,
@@ -109,8 +113,16 @@ impl AudioBuffers {
 		}
 
 		(
-			if self.input_buses.is_empty() { null_mut() } else { self.input_buses.as_mut_ptr() },
-			if self.output_buses.is_empty() { null_mut() } else { self.output_buses.as_mut_ptr() },
+			if self.input_buses.is_empty() {
+				null_mut()
+			} else {
+				self.input_buses.as_mut_ptr()
+			},
+			if self.output_buses.is_empty() {
+				null_mut()
+			} else {
+				self.output_buses.as_mut_ptr()
+			},
 		)
 	}
 

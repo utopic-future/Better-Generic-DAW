@@ -36,7 +36,10 @@ impl ComponentHandler {
 		restart_flags: Arc<AtomicI32>,
 	) -> Self {
 		LIVE_HOST_OBJECTS.fetch_add(1, Relaxed);
-		Self { sender, restart_flags }
+		Self {
+			sender,
+			restart_flags,
+		}
 	}
 
 	fn send(&self, message: MainThreadMessage) -> tresult {
@@ -56,7 +59,10 @@ impl Class for ComponentHandler {
 	type Interfaces = (IComponentHandler,);
 }
 
-#[expect(clippy::renamed_function_params, reason = "the names of the trait's parameters aren't snake case")]
+#[expect(
+	clippy::renamed_function_params,
+	reason = "the names of the trait's parameters aren't snake case"
+)]
 impl IComponentHandlerTrait for ComponentHandler {
 	unsafe fn beginEdit(&self, id: ParamID) -> tresult {
 		self.send(MainThreadMessage::BeginEdit(id))

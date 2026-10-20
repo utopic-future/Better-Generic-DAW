@@ -67,7 +67,9 @@ impl IEventListTrait for EventList {
 
 		// SAFETY:
 		// `e` is non-null and points to an `Event`.
-		unsafe { *e = event; }
+		unsafe {
+			*e = event;
+		}
 		kResultOk
 	}
 
@@ -80,6 +82,10 @@ impl IEventListTrait for EventList {
 		// `e` is non-null and points to an `Event`.
 		let event = unsafe { *e };
 
-		if self.push(event) { kResultOk } else { kResultFalse }
+		if self.push(event) {
+			kResultOk
+		} else {
+			kResultFalse
+		}
 	}
 }

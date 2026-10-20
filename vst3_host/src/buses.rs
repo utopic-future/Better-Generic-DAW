@@ -3,12 +3,12 @@ use std::ptr::null_mut;
 use vst3::{
 	ComPtr,
 	Steinberg::{
-		kResultOk,
 		Vst::{
 			BusDirection, BusDirections_, BusInfo, BusTypes_, IAudioProcessor,
 			IAudioProcessorTrait as _, IComponent, IComponentTrait as _, MediaType, MediaTypes_,
 			SpeakerArr, SpeakerArrangement,
 		},
+		kResultOk,
 	},
 };
 
@@ -138,15 +138,28 @@ pub fn negotiate(
 		outputs[index] = SpeakerArr::kStereo;
 	}
 
-	let inputs_ptr = if inputs.is_empty() { null_mut() } else { inputs.as_mut_ptr() };
-	let outputs_ptr = if outputs.is_empty() { null_mut() } else { outputs.as_mut_ptr() };
+	let inputs_ptr = if inputs.is_empty() {
+		null_mut()
+	} else {
+		inputs.as_mut_ptr()
+	};
+	let outputs_ptr = if outputs.is_empty() {
+		null_mut()
+	} else {
+		outputs.as_mut_ptr()
+	};
 
 	// Whether the plugin accepts is less interesting than what it ends up with, a plugin that
 	// refuses keeps its own arrangement, and we adapt to that.
 	// SAFETY:
 	// Both pointers are valid for the given counts, or null for a count of zero.
 	let _ = unsafe {
-		processor.setBusArrangements(inputs_ptr, input_buses as i32, outputs_ptr, output_buses as i32)
+		processor.setBusArrangements(
+			inputs_ptr,
+			input_buses as i32,
+			outputs_ptr,
+			output_buses as i32,
+		)
 	};
 
 	let main_input = main_input
@@ -169,7 +182,9 @@ pub fn negotiate(
 
 		// SAFETY:
 		// `component` is a valid, initialized component.
-		unsafe { component.activateBus(AUDIO, INPUT, index as i32, active.into()); }
+		unsafe {
+			component.activateBus(AUDIO, INPUT, index as i32, active.into());
+		}
 	}
 
 	for index in 0..output_buses {
@@ -177,7 +192,9 @@ pub fn negotiate(
 
 		// SAFETY:
 		// `component` is a valid, initialized component.
-		unsafe { component.activateBus(AUDIO, OUTPUT, index as i32, active.into()); }
+		unsafe {
+			component.activateBus(AUDIO, OUTPUT, index as i32, active.into());
+		}
 	}
 
 	let event_inputs = bus_count(component, EVENT, INPUT);
@@ -186,13 +203,17 @@ pub fn negotiate(
 	for index in 0..event_inputs {
 		// SAFETY:
 		// `component` is a valid, initialized component.
-		unsafe { component.activateBus(EVENT, INPUT, index as i32, 1); }
+		unsafe {
+			component.activateBus(EVENT, INPUT, index as i32, 1);
+		}
 	}
 
 	for index in 0..event_outputs {
 		// SAFETY:
 		// `component` is a valid, initialized component.
-		unsafe { component.activateBus(EVENT, OUTPUT, index as i32, 1); }
+		unsafe {
+			component.activateBus(EVENT, OUTPUT, index as i32, 1);
+		}
 	}
 
 	Ok(AudioLayout {

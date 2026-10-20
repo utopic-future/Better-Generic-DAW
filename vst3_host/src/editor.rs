@@ -7,9 +7,9 @@ use std::{
 use vst3::{
 	Class,
 	Steinberg::{
-		FIDString, IPlugFrame, IPlugFrameTrait, IPlugView, ViewRect, kInvalidArgument, kResultOk,
+		FIDString, IPlugFrame, IPlugFrameTrait, IPlugView, ViewRect, kInvalidArgument,
 		kPlatformTypeHIView, kPlatformTypeHWND, kPlatformTypeNSView, kPlatformTypeX11EmbedWindowID,
-		tresult,
+		kResultOk, tresult,
 	},
 };
 
@@ -142,7 +142,10 @@ impl Class for PlugFrame {
 	type Interfaces = (IPlugFrame,);
 }
 
-#[expect(clippy::renamed_function_params, reason = "the names of the trait's parameters aren't snake case")]
+#[expect(
+	clippy::renamed_function_params,
+	reason = "the names of the trait's parameters aren't snake case"
+)]
 impl IPlugFrameTrait for PlugFrame {
 	unsafe fn resizeView(&self, _view: *mut IPlugView, new_size: *mut ViewRect) -> tresult {
 		if new_size.is_null() {

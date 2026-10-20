@@ -4,18 +4,16 @@ mod common;
 
 use dsp as _;
 use libloading as _;
-use raw_window_handle as _;
 use log as _;
+use raw_window_handle as _;
 use std::{ffi::c_void, path::Path, ptr::null_mut, sync::Arc};
 use vst3::{
 	ComWrapper,
 	Steinberg::{
-		IBStream, IBStreamTrait as _, IBStream_::IStreamSeekMode_, kInvalidArgument, kResultOk,
+		IBStream, IBStream_::IStreamSeekMode_, IBStreamTrait as _, kInvalidArgument, kResultOk,
 	},
 };
-use vst3_host::{
-	AudioConfig, Error, Event, MemoryStream, Plugin, ProcessStatus, descriptors,
-};
+use vst3_host::{AudioConfig, Error, Event, MemoryStream, Plugin, ProcessStatus, descriptors};
 use walkdir as _;
 
 const CONFIG: AudioConfig = AudioConfig {
@@ -55,7 +53,11 @@ fn gain_of(plugin: &mut Plugin) -> f32 {
 /// Sets the gain the way a host does: the processor through `process`, the controller directly.
 fn set_gain(plugin: &mut Plugin, gain: f64) {
 	let mut audio = plugin.activate(CONFIG).unwrap();
-	audio.push_event(Event::ParamValue { time: 0, id: 0, value: gain });
+	audio.push_event(Event::ParamValue {
+		time: 0,
+		id: 0,
+		value: gain,
+	});
 	let mut buf = vec![[0.0, 0.0]; 64];
 	audio.process(&mut buf, None, 1.0);
 	plugin.deactivate(audio);
@@ -280,7 +282,13 @@ fn write(ptr: &vst3::ComPtr<IBStream>, bytes: &[u8]) -> i32 {
 
 	// SAFETY:
 	// `bytes` is valid for its length, and `written` is a valid out pointer.
-	let result = unsafe { ptr.write(bytes.as_mut_ptr().cast(), bytes.len() as i32, &raw mut written) };
+	let result = unsafe {
+		ptr.write(
+			bytes.as_mut_ptr().cast(),
+			bytes.len() as i32,
+			&raw mut written,
+		)
+	};
 	assert_eq!(result, kResultOk);
 	written
 }
@@ -324,9 +332,18 @@ fn invalid_arguments(ptr: &vst3::ComPtr<IBStream>) {
 	// SAFETY:
 	// The pointers are deliberately invalid, the stream has to check for them.
 	unsafe {
-		assert_eq!(ptr.read(null_mut::<c_void>(), 4, null_mut()), kInvalidArgument);
-		assert_eq!(ptr.write(null_mut::<c_void>(), 4, null_mut()), kInvalidArgument);
-		assert_eq!(ptr.read(null_mut::<c_void>(), -1, null_mut()), kInvalidArgument);
+		assert_eq!(
+			ptr.read(null_mut::<c_void>(), 4, null_mut()),
+			kInvalidArgument
+		);
+		assert_eq!(
+			ptr.write(null_mut::<c_void>(), 4, null_mut()),
+			kInvalidArgument
+		);
+		assert_eq!(
+			ptr.read(null_mut::<c_void>(), -1, null_mut()),
+			kInvalidArgument
+		);
 		assert_eq!(ptr.tell(null_mut()), kInvalidArgument);
 	}
 }

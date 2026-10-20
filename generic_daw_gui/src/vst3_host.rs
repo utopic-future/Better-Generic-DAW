@@ -308,8 +308,10 @@ impl Vst3Host {
 					} else {
 						// the plugin is on its way back from the window, try once more
 						let message = Message::WindowCloseRequested(window);
-						return Task::perform(Timer::after(Duration::from_millis(100)), |_| message)
-							.into();
+						return Task::perform(Timer::after(Duration::from_millis(100)), |_| {
+							message
+						})
+						.into();
 					}
 
 					return window::close(window).into();
@@ -387,7 +389,9 @@ impl Vst3Host {
 				let hosted = plugin!();
 
 				if let Some(&window) = self.window_of_plugin.get(&id) {
-					hosted.plugin.apply_editor_size(EditorSize { width, height });
+					hosted
+						.plugin
+						.apply_editor_size(EditorSize { width, height });
 
 					return window::resize(window, (width as f32, height as f32).into()).into();
 				}
@@ -505,9 +509,10 @@ impl Vst3Host {
 										.stepped(param.is_discrete())
 										.maybe_tooltip(plugin.param_display(param.id, value)),
 										move || container(
-											menu_entry(rotate_ccw(), "Reset", "Ctrl-Click").on_press(
-												Message::HostParamValueChange(id, param_id, default)
-											),
+											menu_entry(rotate_ccw(), "Reset", "Ctrl-Click")
+												.on_press(Message::HostParamValueChange(
+													id, param_id, default
+												)),
 										)
 										.width(160)
 										.style(container_with_radius(weaker_bordered_box, 5))

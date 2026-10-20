@@ -4,9 +4,12 @@ mod common;
 
 use dsp as _;
 use libloading as _;
-use raw_window_handle as _;
 use log as _;
-use std::{path::Path, sync::{Arc, mpsc::Receiver}};
+use raw_window_handle as _;
+use std::{
+	path::Path,
+	sync::{Arc, mpsc::Receiver},
+};
 use vst3 as _;
 use vst3_host::{
 	AudioConfig, Event, MainThreadMessage, Plugin, ProcessStatus, RestartActions, RestartFlags,
@@ -49,7 +52,9 @@ fn restart_flags(receiver: &Receiver<MainThreadMessage>) -> RestartFlags {
 }
 
 fn ramp(len: usize) -> Vec<[f32; 2]> {
-	(0..len).map(|i| [i as f32 + 1.0, -(i as f32) - 1.0]).collect()
+	(0..len)
+		.map(|i| [i as f32 + 1.0, -(i as f32) - 1.0])
+		.collect()
 }
 
 #[test]
@@ -61,7 +66,12 @@ fn single_component_plugins_work() {
 	assert!(!plugin.is_connected());
 
 	// the others report what the editor was told, see the plugin
-	let titles = plugin.params().iter().take(3).map(|p| &*p.title).collect::<Vec<_>>();
+	let titles = plugin
+		.params()
+		.iter()
+		.take(3)
+		.map(|p| &*p.title)
+		.collect::<Vec<_>>();
 	assert_eq!(titles, ["Trigger", "Name A", "Value"]);
 	assert_eq!(plugin.params().len(), 10);
 
@@ -105,7 +115,10 @@ fn latency_changes_dont_need_a_restart() {
 
 	assert_eq!(
 		plugin.handle_restart(flags),
-		RestartActions { update_latency: true, ..RestartActions::default() }
+		RestartActions {
+			update_latency: true,
+			..RestartActions::default()
+		}
 	);
 
 	// nothing changes until the audio thread is told
@@ -155,7 +168,11 @@ fn io_changes_need_a_restart_and_a_new_layout() {
 #[test]
 fn reloading_keeps_the_configuration() {
 	let (mut plugin, receiver) = plugin();
-	let config = AudioConfig { sample_rate: 96000.0, max_frames: 64, offline: true };
+	let config = AudioConfig {
+		sample_rate: 96000.0,
+		max_frames: 64,
+		offline: true,
+	};
 	let audio = plugin.activate(config).unwrap();
 
 	plugin.set_param_normalized(TRIGGER, 0.3).unwrap();
@@ -207,7 +224,10 @@ fn renamed_parameters_are_picked_up() {
 	let actions = plugin.handle_restart(flags);
 	assert_eq!(
 		actions,
-		RestartActions { params_changed: true, ..RestartActions::default() }
+		RestartActions {
+			params_changed: true,
+			..RestartActions::default()
+		}
 	);
 	assert_eq!(&*plugin.param(NAME).unwrap().title, "Name B");
 }
@@ -223,7 +243,10 @@ fn values_changed_by_the_plugin_can_be_read_again() {
 	let actions = plugin.handle_restart(flags);
 	assert_eq!(
 		actions,
-		RestartActions { reread_param_values: true, ..RestartActions::default() }
+		RestartActions {
+			reread_param_values: true,
+			..RestartActions::default()
+		}
 	);
 	assert_close(plugin.param_normalized(VALUE).unwrap(), 0.9);
 }
@@ -233,7 +256,11 @@ fn requests_from_the_audio_thread_arrive_too() {
 	let (mut plugin, receiver) = plugin();
 	let mut audio = plugin.activate(CONFIG).unwrap();
 
-	audio.push_event(Event::ParamValue { time: 0, id: TRIGGER, value: 0.9 });
+	audio.push_event(Event::ParamValue {
+		time: 0,
+		id: TRIGGER,
+		value: 0.9,
+	});
 
 	let audio = std::thread::spawn(move || {
 		let mut buf = vec![[0.5, 0.5]; 32];
@@ -259,10 +286,16 @@ fn requests_from_the_audio_thread_arrive_too() {
 fn restart_flags_are_combined_and_unknown_ones_ignored() {
 	let (mut plugin, _receiver) = plugin();
 
-	assert_eq!(plugin.handle_restart(RestartFlags(0)), RestartActions::default());
+	assert_eq!(
+		plugin.handle_restart(RestartFlags(0)),
+		RestartActions::default()
+	);
 
 	// routing info changes, which this host doesn't use
-	assert_eq!(plugin.handle_restart(RestartFlags(512)), RestartActions::default());
+	assert_eq!(
+		plugin.handle_restart(RestartFlags(512)),
+		RestartActions::default()
+	);
 
 	let both = RestartFlags(RestartFlags::LATENCY_CHANGED | RestartFlags::PARAM_VALUES_CHANGED);
 	assert_eq!(
@@ -294,10 +327,18 @@ fn the_audio_thread_sees_requests_without_the_main_thread() {
 	assert_eq!(audio.restart_flags(), RestartFlags(0));
 
 	// requests from the audio thread itself show up in the same place
-	audio.push_event(Event::ParamValue { time: 0, id: TRIGGER, value: 0.9 });
+	audio.push_event(Event::ParamValue {
+		time: 0,
+		id: TRIGGER,
+		value: 0.9,
+	});
 	let mut buf = vec![[0.5, 0.5]; 32];
 	audio.process(&mut buf, None, 1.0);
-	assert!(audio.restart_flags().contains(RestartFlags::LATENCY_CHANGED));
+	assert!(
+		audio
+			.restart_flags()
+			.contains(RestartFlags::LATENCY_CHANGED)
+	);
 
 	// requests are combined
 	plugin.set_param_normalized(TRIGGER, 0.4).unwrap();

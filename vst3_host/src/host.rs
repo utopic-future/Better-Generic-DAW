@@ -9,10 +9,9 @@ use std::{
 use vst3::{
 	Class, ComWrapper, Interface as _,
 	Steinberg::{
-		FUnknown, TUID, kInvalidArgument, kResultOk, tresult,
-		Vst::{
-			IAttributeList, IHostApplication, IHostApplicationTrait, IMessage, String128,
-		},
+		FUnknown, TUID,
+		Vst::{IAttributeList, IHostApplication, IHostApplicationTrait, IMessage, String128},
+		kInvalidArgument, kResultOk, tresult,
 	},
 };
 

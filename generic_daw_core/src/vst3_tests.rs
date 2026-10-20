@@ -5,10 +5,9 @@
 mod common;
 
 use crate::{
-	AudioBackend, AudioProcessor, Event,
+	AudioBackend, AudioProcessor, Event, Transport,
 	plugin::process_vst3,
 	time::{BeatRange, BeatTime, SecondsTime},
-	Transport,
 };
 use clap_host::{
 	ClapId,
@@ -245,7 +244,14 @@ fn parameters_reach_the_plugin() {
 
 	let mut events = vec![param(0, 0.5)];
 	let mut buf = vec![[0.8, 0.8]; 64];
-	let latency = process_vst3(&mut audio, &mut updates, &transport, &mut buf, &mut events, 1.0);
+	let latency = process_vst3(
+		&mut audio,
+		&mut updates,
+		&transport,
+		&mut buf,
+		&mut events,
+		1.0,
+	);
 
 	assert!((buf[10][0] - 0.4).abs() < 1e-6);
 	assert_eq!(latency, 0);
@@ -255,7 +261,14 @@ fn parameters_reach_the_plugin() {
 
 	// the mix level is passed on
 	let mut buf = vec![[0.8, 0.8]; 64];
-	process_vst3(&mut audio, &mut updates, &transport, &mut buf, &mut events, 0.0);
+	process_vst3(
+		&mut audio,
+		&mut updates,
+		&transport,
+		&mut buf,
+		&mut events,
+		0.0,
+	);
 	assert!((buf[10][0] - 0.8).abs() < 1e-6);
 
 	plugin.deactivate(audio);
@@ -269,7 +282,14 @@ fn the_plugins_own_events_come_back() {
 
 	let mut events = vec![note_on(10, 60, Match::Specific(5)), param(7, 0.3)];
 	let mut buf = vec![[0.0, 0.0]; 128];
-	let latency = process_vst3(&mut audio, &mut updates, &transport, &mut buf, &mut events, 1.0);
+	let latency = process_vst3(
+		&mut audio,
+		&mut updates,
+		&transport,
+		&mut buf,
+		&mut events,
+		1.0,
+	);
 
 	// the probe latency
 	assert_eq!(latency, 64);
@@ -300,7 +320,14 @@ fn the_plugin_sees_the_transport() {
 
 	let mut events = Vec::new();
 	let mut buf = vec![[0.0, 0.0]; 64];
-	process_vst3(&mut audio, &mut updates, &transport(), &mut buf, &mut events, 1.0);
+	process_vst3(
+		&mut audio,
+		&mut updates,
+		&transport(),
+		&mut buf,
+		&mut events,
+		1.0,
+	);
 
 	// the probe reports what it got: tempo, time signature, position in quarters and samples
 	assert_close(f64::from(buf[0][0]), 120.0);
@@ -319,12 +346,26 @@ fn latency_changes_are_handled_in_place() {
 	let transport = transport();
 
 	let mut buf = vec![[0.5, 0.5]; 64];
-	let before = process_vst3(&mut audio, &mut updates, &transport, &mut buf, &mut Vec::new(), 1.0);
+	let before = process_vst3(
+		&mut audio,
+		&mut updates,
+		&transport,
+		&mut buf,
+		&mut Vec::new(),
+		1.0,
+	);
 	assert_eq!(before, 0);
 
 	// the plugin asks for this from the audio thread, and gets it without a restart
 	let mut events = vec![param(0, 0.9)];
-	let after = process_vst3(&mut audio, &mut updates, &transport, &mut buf, &mut events, 1.0);
+	let after = process_vst3(
+		&mut audio,
+		&mut updates,
+		&transport,
+		&mut buf,
+		&mut events,
+		1.0,
+	);
 	assert_eq!(after, 16);
 	assert!(!audio.restart_flags().needs_restart());
 	assert_eq!(audio.restart_flags().0, 0);

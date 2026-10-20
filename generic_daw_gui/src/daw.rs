@@ -1,8 +1,6 @@
 use crate::{
 	arrangement_view::{self, Arrangement, ArrangementView, Feedback},
 	clap_host::{self, ClapHost, PluginId},
-	plugin_descriptor::PluginDescriptor,
-	vst3_host::{self, Vst3Host},
 	components::{menu_entry, number_input},
 	config::Config,
 	config_view::{self, ConfigView},
@@ -11,19 +9,20 @@ use crate::{
 		arrow_big_right, chart_no_axes_gantt, cpu, gavel, keyboard_music, magnet, menu, metronome,
 		panel_bottom_dashed, pause, play, plus, sliders_vertical, square,
 	},
+	plugin_descriptor::PluginDescriptor,
 	plugin_picker::{self, PluginPicker},
 	state::{DEFAULT_SPLIT_HEIGHT, DEFAULT_SPLIT_WIDTH, MIN_SPLIT_HEIGHT, MIN_SPLIT_WIDTH, State},
 	stylefns::{
 		button_with_radius, container_with_radius, progress_bar_with_radius, selectable_box,
 		split_style, weak_bordered_box, weaker_bordered_box, weakest_bordered_box,
 	},
+	vst3_host::{self, Vst3Host},
 	widget::{ALPHA_2_3, LINE_HEIGHT},
 };
 use generic_daw_core::{
 	AudioThread, BpmTapper, NodeId, PullSlot, build_streams,
 	clap_host::{
-		ClapId, DEFAULT_CLAP_PATHS, MainThreadMessage, Plugin, RenderMode,
-		StateContextType,
+		ClapId, DEFAULT_CLAP_PATHS, MainThreadMessage, Plugin, RenderMode, StateContextType,
 	},
 };
 use generic_daw_project::proto;
@@ -275,15 +274,13 @@ impl Tab {
 				},
 			))
 			.padding(padding::horizontal(7).vertical(5))
-			.on_press_maybe(
-				(top_pane != self && bottom_pane != Some(self)).then_some(
-					if bottom_pane.is_some() && bottom_selected {
-						Message::BottomPane(self)
-					} else {
-						Message::TopPane(self)
-					},
-				),
-			),
+			.on_press_maybe((top_pane != self && bottom_pane != Some(self)).then_some(
+				if bottom_pane.is_some() && bottom_selected {
+					Message::BottomPane(self)
+				} else {
+					Message::TopPane(self)
+				},
+			)),
 			move || {
 				container(
 					menu_entry(panel_bottom_dashed(), "Detach", "")
@@ -642,9 +639,11 @@ impl Daw {
 				.map(Message::SaveAsFile);
 			}
 			Message::SaveAsFile(path) => {
-				if let Err(err) =
-					std::fs::write(&path, self.arrangement_view.save(&mut self.clap_host, &self.vst3_host))
-				{
+				if let Err(err) = std::fs::write(
+					&path,
+					self.arrangement_view
+						.save(&mut self.clap_host, &self.vst3_host),
+				) {
 					warn!("{err}");
 					return Task::none();
 				}
@@ -674,7 +673,9 @@ impl Daw {
 
 				let path =
 					Arc::<Path>::from(AUTOSAVED_DIR.join(format!("{} {}.gdp", name, format_now())));
-				let gdp = self.arrangement_view.save(&mut self.clap_host, &self.vst3_host);
+				let gdp = self
+					.arrangement_view
+					.save(&mut self.clap_host, &self.vst3_host);
 
 				if let Some(last_path) = self
 					.state
@@ -824,7 +825,7 @@ impl Daw {
 				if self.progress.is_none() {
 					self.progress = Some(0.0);
 					self.clap_host.set_render_mode(RenderMode::Offline);
-				self.vst3_host.set_render_mode(RenderMode::Offline);
+					self.vst3_host.set_render_mode(RenderMode::Offline);
 					return self.arrangement_view.arrangement.render(&path);
 				}
 			}
@@ -894,11 +895,10 @@ impl Daw {
 							DEFAULT_CLAP_PATHS.iter().chain(&clap_paths),
 						)
 						.collect::<Box<_>>();
-						let vst3_plugin_paths =
-							generic_daw_core::vst3_host::find_plugin_paths(
-								generic_daw_core::vst3_host::DEFAULT_VST3_PATHS.iter(),
-							)
-							.collect::<Box<_>>();
+						let vst3_plugin_paths = generic_daw_core::vst3_host::find_plugin_paths(
+							generic_daw_core::vst3_host::DEFAULT_VST3_PATHS.iter(),
+						)
+						.collect::<Box<_>>();
 
 						let len = clap_plugin_paths.len() + vst3_plugin_paths.len();
 						let mut done = 0;
@@ -936,7 +936,9 @@ impl Daw {
 						for path in vst3_plugin_paths {
 							status(&path);
 
-							if let Some(descriptors) = generic_daw_core::vst3_host::descriptors(&path) {
+							if let Some(descriptors) =
+								generic_daw_core::vst3_host::descriptors(&path)
+							{
 								for descriptor in descriptors {
 									sender
 										.try_send(Message::PluginScanned(
@@ -1521,15 +1523,13 @@ impl Daw {
 										),
 									)
 									.padding(self.bottom_pane.map_or_default(|_| 5))
-									.style(
-										container_with_radius(
-											selectable_box(
-												container::transparent,
-												self.bottom_pane.is_some() && !self.bottom_selected,
-											),
-											self.top_pane.radius(),
-										)
-									),
+									.style(container_with_radius(
+										selectable_box(
+											container::transparent,
+											self.bottom_pane.is_some() && !self.bottom_selected,
+										),
+										self.top_pane.radius(),
+									)),
 								)
 								.on_select_maybe(
 									(self.bottom_pane.is_some() && self.bottom_selected)
@@ -1548,15 +1548,13 @@ impl Daw {
 											)),
 									)
 									.padding(5)
-									.style(
-										container_with_radius(
-											selectable_box(
-												container::transparent,
-												self.bottom_selected,
-											),
-											self.bottom_pane.unwrap().radius(),
-										)
-									),
+									.style(container_with_radius(
+										selectable_box(
+											container::transparent,
+											self.bottom_selected,
+										),
+										self.bottom_pane.unwrap().radius(),
+									)),
 								)
 								.on_select_maybe(
 									(!self.bottom_selected)
@@ -1701,10 +1699,12 @@ impl Daw {
 														.padding(
 															padding::horizontal(10).vertical(5)
 														)
-														.style(container_with_radius(
-															weakest_bordered_box,
-															5
-														)),
+														.style(
+															container_with_radius(
+																weakest_bordered_box,
+																5
+															)
+														),
 														row![
 															button("Pick")
 																.on_press(
@@ -1748,9 +1748,9 @@ impl Daw {
 								.align_x(Center)
 								.spacing(10)
 							)
-							.direction(
-								scrollable::Direction::Vertical(scrollable::Scrollbar::hidden(),)
-							)
+							.direction(scrollable::Direction::Vertical(
+								scrollable::Scrollbar::hidden(),
+							))
 						]
 						.align_x(Center)
 						.spacing(20),
@@ -1899,11 +1899,9 @@ impl Daw {
 												modifiers,
 												repeat,
 											)
-											.map(
-												|message| {
-													Message::Arrangement(project, message(tab))
-												},
-											)
+											.map(|message| {
+												Message::Arrangement(project, message(tab))
+											})
 										}
 										.or_else(|| {
 											Self::keybinds(&key, physical_key, modifiers, repeat)

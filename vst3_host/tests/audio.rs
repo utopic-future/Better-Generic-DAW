@@ -4,13 +4,11 @@ mod common;
 
 use dsp as _;
 use libloading as _;
-use raw_window_handle as _;
 use log as _;
+use raw_window_handle as _;
 use std::{path::Path, sync::Arc};
 use vst3 as _;
-use vst3_host::{
-	AudioConfig, AudioThread, Error, Plugin, ProcessStatus, Transport, descriptors,
-};
+use vst3_host::{AudioConfig, AudioThread, Error, Plugin, ProcessStatus, Transport, descriptors};
 use walkdir as _;
 
 const CONFIG: AudioConfig = AudioConfig {
@@ -204,7 +202,11 @@ fn setup_is_passed_to_the_plugin() {
 
 	plugin.deactivate(audio);
 
-	let offline = AudioConfig { offline: true, sample_rate: 44100.0, ..CONFIG };
+	let offline = AudioConfig {
+		offline: true,
+		sample_rate: 44100.0,
+		..CONFIG
+	};
 	let mut audio = plugin.activate(offline).unwrap();
 
 	let mut buf = frames(100, 0.0, 0.0);
@@ -392,9 +394,18 @@ fn invalid_configurations_are_refused() {
 	let mut plugin = plugin("Probe");
 
 	for config in [
-		AudioConfig { max_frames: 0, ..CONFIG },
-		AudioConfig { sample_rate: 0.0, ..CONFIG },
-		AudioConfig { sample_rate: f64::NAN, ..CONFIG },
+		AudioConfig {
+			max_frames: 0,
+			..CONFIG
+		},
+		AudioConfig {
+			sample_rate: 0.0,
+			..CONFIG
+		},
+		AudioConfig {
+			sample_rate: f64::NAN,
+			..CONFIG
+		},
 	] {
 		assert!(plugin.activate(config).is_err(), "{config:?}");
 		assert!(!plugin.is_active());

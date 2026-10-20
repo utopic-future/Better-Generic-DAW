@@ -52,7 +52,9 @@ impl Drop for Module {
 		if let Some(exit) = self.exit.take() {
 			// SAFETY:
 			// `exit` was resolved from `self.library`, which is still loaded.
-			unsafe { exit(); }
+			unsafe {
+				exit();
+			}
 		}
 	}
 }
@@ -108,13 +110,12 @@ impl Module {
 		};
 		// SAFETY:
 		// `factory` is a valid factory and `factory_info` is a valid out pointer.
-		let factory_vendor = if unsafe { factory.getFactoryInfo(&raw mut factory_info) }
-			== kResultOk
-		{
-			c_array_to_string(&factory_info.vendor)
-		} else {
-			String::new()
-		};
+		let factory_vendor =
+			if unsafe { factory.getFactoryInfo(&raw mut factory_info) } == kResultOk {
+				c_array_to_string(&factory_info.vendor)
+			} else {
+				String::new()
+			};
 
 		let factory2 = factory.cast::<IPluginFactory2>();
 		let factory3 = factory.cast::<IPluginFactory3>();
@@ -255,9 +256,11 @@ mod platform {
 
 		// SAFETY:
 		// The VST3 spec defines `ModuleEntry` as `bool (*)(void*)`.
-		let entry = unsafe { library.get::<unsafe extern "system" fn(*mut c_void) -> bool>(b"ModuleEntry\0") }
-			.ok()
-			.map(|entry| *entry);
+		let entry = unsafe {
+			library.get::<unsafe extern "system" fn(*mut c_void) -> bool>(b"ModuleEntry\0")
+		}
+		.ok()
+		.map(|entry| *entry);
 
 		if let Some(entry) = entry {
 			// SAFETY:

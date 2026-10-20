@@ -1,6 +1,6 @@
 use crate::{
-	AudioLayout, Event, Module, RestartFlags, Transport, audio_buffers::AudioBuffers, event_list::EventList,
-	param_changes::ParameterChanges,
+	AudioLayout, Event, Module, RestartFlags, Transport, audio_buffers::AudioBuffers,
+	event_list::EventList, param_changes::ParameterChanges,
 };
 use std::{
 	ptr::null_mut,
@@ -12,11 +12,11 @@ use std::{
 use vst3::{
 	ComPtr, ComWrapper,
 	Steinberg::{
-		kNotImplemented, kResultOk,
 		Vst::{
 			IAudioProcessor, IAudioProcessorTrait as _, IEventList, IParameterChanges, ProcessData,
 			ProcessModes_, SymbolicSampleSizes_,
 		},
+		kNotImplemented, kResultOk,
 	},
 };
 
@@ -192,7 +192,10 @@ impl AudioThread {
 			return false;
 		}
 
-		self.pending.push(Pending { event, seq: self.seq });
+		self.pending.push(Pending {
+			event,
+			seq: self.seq,
+		});
 		self.seq = self.seq.wrapping_add(1);
 		true
 	}
@@ -249,7 +252,8 @@ impl AudioThread {
 		}
 
 		// the arrival order is the tie breaker, so this doesn't have to be a stable sort
-		self.pending.sort_unstable_by_key(|pending| (pending.event.time(), pending.seq));
+		self.pending
+			.sort_unstable_by_key(|pending| (pending.event.time(), pending.seq));
 
 		let total = audio.len();
 		let mut next_event = 0;
@@ -450,7 +454,9 @@ impl AudioThread {
 
 			// SAFETY:
 			// `processor` is a valid, active processor.
-			unsafe { self.processor.setProcessing(0); }
+			unsafe {
+				self.processor.setProcessing(0);
+			}
 		}
 	}
 

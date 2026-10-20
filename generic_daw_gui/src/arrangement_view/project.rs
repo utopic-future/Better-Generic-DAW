@@ -3,10 +3,10 @@
 use crate::{
 	arrangement_view::{self, Arrangement, crc, midi_pattern::MidiPatternPair, sample::SamplePair},
 	clap_host::ClapHost,
-	plugin_descriptor::PluginDescriptor,
-	vst3_host::Vst3Host,
 	config::Config,
 	daw::{self, Project},
+	plugin_descriptor::PluginDescriptor,
+	vst3_host::Vst3Host,
 };
 use generic_daw_core::{
 	AudioClip, Channels, Clip, ClipId, MidiClip, MidiKey, MidiNote, MidiNoteId, NodeId, PanMode,
@@ -141,7 +141,9 @@ impl Arrangement {
 						enable_midi: track.input.enable_midi,
 					}),
 					&node.name,
-					node.plugins.iter().map(|plugin| save_plugin(plugin, clap_host, vst3_host)),
+					node.plugins
+						.iter()
+						.map(|plugin| save_plugin(plugin, clap_host, vst3_host)),
 					node.utility.volume,
 					match node.utility.pan {
 						PanMode::Stereo(pan) => proto::PanModeStereo { pan }.into(),

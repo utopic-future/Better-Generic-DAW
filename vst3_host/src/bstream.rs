@@ -5,7 +5,7 @@ use std::{
 use vst3::{
 	Class,
 	Steinberg::{
-		IBStream, IBStreamTrait, IBStream_::IStreamSeekMode_, int32, int64, kInvalidArgument,
+		IBStream, IBStream_::IStreamSeekMode_, IBStreamTrait, int32, int64, kInvalidArgument,
 		kResultFalse, kResultOk, tresult,
 	},
 };
@@ -64,7 +64,10 @@ impl Class for MemoryStream {
 	type Interfaces = (IBStream,);
 }
 
-#[expect(clippy::renamed_function_params, reason = "the names of the trait's parameters aren't snake case")]
+#[expect(
+	clippy::renamed_function_params,
+	reason = "the names of the trait's parameters aren't snake case"
+)]
 impl IBStreamTrait for MemoryStream {
 	unsafe fn read(
 		&self,
@@ -90,7 +93,11 @@ impl IBStreamTrait for MemoryStream {
 			// `buffer` is non-null and has room for `wanted >= count` bytes, and `data` holds at
 			// least `count` bytes after `position`. They can't overlap, `data` is ours.
 			unsafe {
-				std::ptr::copy_nonoverlapping(data[position..].as_ptr(), buffer.cast::<u8>(), count);
+				std::ptr::copy_nonoverlapping(
+					data[position..].as_ptr(),
+					buffer.cast::<u8>(),
+					count,
+				);
 			}
 		}
 
@@ -99,7 +106,9 @@ impl IBStreamTrait for MemoryStream {
 		if !num_bytes_read.is_null() {
 			// SAFETY:
 			// `num_bytes_read` is non-null.
-			unsafe { *num_bytes_read = count as int32; }
+			unsafe {
+				*num_bytes_read = count as int32;
+			}
 		}
 
 		kResultOk
@@ -120,7 +129,10 @@ impl IBStreamTrait for MemoryStream {
 		}
 
 		let position = self.position.get();
-		let Some(end) = position.checked_add(count).filter(|&end| end <= MAX_STREAM_BYTES) else {
+		let Some(end) = position
+			.checked_add(count)
+			.filter(|&end| end <= MAX_STREAM_BYTES)
+		else {
 			return kResultFalse;
 		};
 
@@ -149,7 +161,9 @@ impl IBStreamTrait for MemoryStream {
 		if !num_bytes_written.is_null() {
 			// SAFETY:
 			// `num_bytes_written` is non-null.
-			unsafe { *num_bytes_written = count as int32; }
+			unsafe {
+				*num_bytes_written = count as int32;
+			}
 		}
 
 		kResultOk
@@ -176,7 +190,9 @@ impl IBStreamTrait for MemoryStream {
 		if !result.is_null() {
 			// SAFETY:
 			// `result` is non-null.
-			unsafe { *result = target as int64; }
+			unsafe {
+				*result = target as int64;
+			}
 		}
 
 		kResultOk
@@ -189,7 +205,9 @@ impl IBStreamTrait for MemoryStream {
 
 		// SAFETY:
 		// `pos` is non-null.
-		unsafe { *pos = self.position.get() as int64; }
+		unsafe {
+			*pos = self.position.get() as int64;
+		}
 		kResultOk
 	}
 }

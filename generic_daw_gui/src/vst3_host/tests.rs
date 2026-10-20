@@ -7,12 +7,12 @@ mod common;
 
 use super::{Message, Vst3Host};
 use crate::{clap_host::PluginId, daw};
+use fragile::Fragile;
 use generic_daw_core::{
 	AudioBackend, AudioProcessor, AudioThreadMessage, Transport,
 	clap_host::ClapId,
 	vst3_host::{self as host, EditorSize, MainThreadMessage, ParentWindow},
 };
-use fragile::Fragile;
 use iced::{Task, window};
 use std::{num::NonZero, path::Path, sync::Arc};
 use utils::{NoClone, NoDebug};
@@ -33,12 +33,13 @@ fn transport() -> Transport {
 fn run(host: &mut Vst3Host, message: Message) -> Vec<daw::Instruction> {
 	let mut instructions = Vec::new();
 
-	let _task = host
-		.update(message, &transport())
-		.handle(|message| message, |instruction| {
+	let _task = host.update(message, &transport()).handle(
+		|message| message,
+		|instruction| {
 			instructions.push(instruction);
 			Task::none()
-		});
+		},
+	);
 
 	instructions
 }
@@ -97,13 +98,19 @@ fn activating_gives_the_audio_thread() {
 	assert!(run(&mut host, Message::Activate(id)).is_empty());
 
 	// the audio thread hands the processor back, and the plugin is inactive again
-	let instructions = run(&mut host, audio_thread(id, AudioThreadMessage::Deactivate(processor)));
+	let instructions = run(
+		&mut host,
+		audio_thread(id, AudioThreadMessage::Deactivate(processor)),
+	);
 	assert!(instructions.is_empty());
 	assert!(!host.plugins[&id].active);
 
 	// it can be activated again
 	let (processor, _) = activate(&mut host, id);
-	run(&mut host, audio_thread(id, AudioThreadMessage::Deactivate(processor)));
+	run(
+		&mut host,
+		audio_thread(id, AudioThreadMessage::Deactivate(processor)),
+	);
 }
 
 #[test]
@@ -112,13 +119,19 @@ fn parameters_from_the_list_go_to_the_plugin_and_the_processor() {
 	let id = add(&mut host, "Gain");
 
 	// inactive plugins only have the value set
-	let instructions = run(&mut host, Message::HostParamValueChange(id, param(GAIN), 0.5));
+	let instructions = run(
+		&mut host,
+		Message::HostParamValueChange(id, param(GAIN), 0.5),
+	);
 	assert!(instructions.is_empty());
 	assert_eq!(host.plugins[&id].plugin.param_normalized(GAIN), Some(0.5));
 
 	let (processor, _) = activate(&mut host, id);
 
-	let instructions = run(&mut host, Message::HostParamValueChange(id, param(GAIN), 0.25));
+	let instructions = run(
+		&mut host,
+		Message::HostParamValueChange(id, param(GAIN), 0.25),
+	);
 	assert!(matches!(
 		instructions[..],
 		[daw::Instruction::PluginParamChanged(changed, changed_param, value)]
@@ -127,10 +140,16 @@ fn parameters_from_the_list_go_to_the_plugin_and_the_processor() {
 	assert_eq!(host.plugins[&id].plugin.param_normalized(GAIN), Some(0.25));
 
 	// parameters that are only shown aren't set
-	let instructions = run(&mut host, Message::HostParamValueChange(id, param(METER), 0.9));
+	let instructions = run(
+		&mut host,
+		Message::HostParamValueChange(id, param(METER), 0.9),
+	);
 	assert!(instructions.is_empty());
 
-	run(&mut host, audio_thread(id, AudioThreadMessage::Deactivate(processor)));
+	run(
+		&mut host,
+		audio_thread(id, AudioThreadMessage::Deactivate(processor)),
+	);
 }
 
 #[test]
@@ -138,7 +157,10 @@ fn values_the_plugin_changes_reach_the_controller() {
 	let mut host = host();
 	let id = add(&mut host, "Gain");
 
-	let instructions = run(&mut host, Message::PluginParamValueChange(id, param(GAIN), 0.75));
+	let instructions = run(
+		&mut host,
+		Message::PluginParamValueChange(id, param(GAIN), 0.75),
+	);
 	assert!(instructions.is_empty());
 	assert_eq!(host.plugins[&id].plugin.param_normalized(GAIN), Some(0.75));
 }
@@ -163,10 +185,25 @@ fn edits_in_the_plugins_editor_reach_the_processor() {
 	));
 
 	// beginning and ending an edit has nothing to do
-	assert!(run(&mut host, Message::MainThread(id, MainThreadMessage::BeginEdit(GAIN))).is_empty());
-	assert!(run(&mut host, Message::MainThread(id, MainThreadMessage::EndEdit(GAIN))).is_empty());
+	assert!(
+		run(
+			&mut host,
+			Message::MainThread(id, MainThreadMessage::BeginEdit(GAIN))
+		)
+		.is_empty()
+	);
+	assert!(
+		run(
+			&mut host,
+			Message::MainThread(id, MainThreadMessage::EndEdit(GAIN))
+		)
+		.is_empty()
+	);
 
-	run(&mut host, audio_thread(id, AudioThreadMessage::Deactivate(processor)));
+	run(
+		&mut host,
+		audio_thread(id, AudioThreadMessage::Deactivate(processor)),
+	);
 }
 
 #[test]
@@ -176,10 +213,17 @@ fn restarts_set_up_the_audio_again() {
 	let (processor, _) = activate(&mut host, id);
 
 	// the plugin turns mono, and the audio thread hands the processor back
-	host.plugins[&id].plugin.set_param_normalized(0, 0.2).unwrap();
-	let mut instructions = run(&mut host, audio_thread(id, AudioThreadMessage::Restart(processor)));
+	host.plugins[&id]
+		.plugin
+		.set_param_normalized(0, 0.2)
+		.unwrap();
+	let mut instructions = run(
+		&mut host,
+		audio_thread(id, AudioThreadMessage::Restart(processor)),
+	);
 
-	let daw::Instruction::Vst3PluginRestart(restarted, Some((audio, params))) = instructions.remove(0)
+	let daw::Instruction::Vst3PluginRestart(restarted, Some((audio, params))) =
+		instructions.remove(0)
 	else {
 		panic!("expected the plugin to be restarted");
 	};
@@ -188,7 +232,10 @@ fn restarts_set_up_the_audio_again() {
 	assert!(host.plugins[&id].active);
 
 	let (processor, _) = AudioProcessor::create_vst3(audio, params);
-	run(&mut host, audio_thread(id, AudioThreadMessage::Deactivate(processor)));
+	run(
+		&mut host,
+		audio_thread(id, AudioThreadMessage::Deactivate(processor)),
+	);
 	assert!(!host.plugins[&id].active);
 }
 
@@ -198,7 +245,10 @@ fn destroying_removes_the_plugin() {
 	let id = add(&mut host, "Gain");
 	let (processor, _) = activate(&mut host, id);
 
-	run(&mut host, audio_thread(id, AudioThreadMessage::Destroy(processor)));
+	run(
+		&mut host,
+		audio_thread(id, AudioThreadMessage::Destroy(processor)),
+	);
 	assert!(host.plugins.is_empty());
 
 	// plugins that aren't active can go right away
@@ -221,7 +271,10 @@ fn plugins_without_an_editor_get_a_window_with_their_parameters() {
 	// the plugin stays here, and the window shows its parameters
 	assert!(host.plugins.contains_key(&id));
 	assert!(host.view(window).is_some());
-	assert_eq!(host.title(window).as_deref(), Some("Gain (vst3-rs example plugin)"));
+	assert_eq!(
+		host.title(window).as_deref(),
+		Some("Gain (vst3-rs example plugin)")
+	);
 	assert_eq!(host.scale_factor(window), None);
 
 	// opening it again doesn't make another window
@@ -266,7 +319,10 @@ fn windows_of_other_hosts_are_nothing_to_this_one() {
 	run(&mut host, Message::WindowClosed(stranger));
 	run(&mut host, Message::WindowCloseRequested(stranger));
 	run(&mut host, Message::WindowRescaled(stranger, 1.5));
-	run(&mut host, Message::WindowResized(stranger, iced::Size::new(10.0, 10.0)));
+	run(
+		&mut host,
+		Message::WindowResized(stranger, iced::Size::new(10.0, 10.0)),
+	);
 
 	assert!(host.view(stranger).is_none());
 	assert!(host.title(stranger).is_none());
@@ -280,8 +336,20 @@ fn messages_for_plugins_that_arent_there_yet_are_tried_again() {
 
 	// nothing happens right now, and nothing panics
 	assert!(run(&mut host, Message::Activate(id)).is_empty());
-	assert!(run(&mut host, Message::HostParamValueChange(id, param(GAIN), 0.5)).is_empty());
-	assert!(run(&mut host, Message::MainThread(id, MainThreadMessage::PerformEdit(GAIN, 0.5))).is_empty());
+	assert!(
+		run(
+			&mut host,
+			Message::HostParamValueChange(id, param(GAIN), 0.5)
+		)
+		.is_empty()
+	);
+	assert!(
+		run(
+			&mut host,
+			Message::MainThread(id, MainThreadMessage::PerformEdit(GAIN, 0.5))
+		)
+		.is_empty()
+	);
 	assert!(host.plugins.is_empty());
 }
 
@@ -292,10 +360,19 @@ fn state_goes_from_one_plugin_to_another() {
 	let to = add(&mut host, "Gain");
 
 	// the mode parameter is part of what the controller saves
-	host.plugins[&from].plugin.set_param_normalized(2, 2.0 / 3.0).unwrap();
+	host.plugins[&from]
+		.plugin
+		.set_param_normalized(2, 2.0 / 3.0)
+		.unwrap();
 	let state = host.get_state(from).unwrap();
 
-	assert!(run(&mut host, Message::SetState(to, NoDebug(state.into_boxed_slice()))).is_empty());
+	assert!(
+		run(
+			&mut host,
+			Message::SetState(to, NoDebug(state.into_boxed_slice()))
+		)
+		.is_empty()
+	);
 	let mode = host.plugins[&to].plugin.param_normalized(2).unwrap();
 	assert!((mode - 2.0 / 3.0).abs() < 1e-9);
 
@@ -307,7 +384,13 @@ fn damaged_states_are_ignored() {
 	let mut host = host();
 	let id = add(&mut host, "Gain");
 
-	assert!(run(&mut host, Message::SetState(id, NoDebug(Box::from(&b"garbage"[..])))).is_empty());
+	assert!(
+		run(
+			&mut host,
+			Message::SetState(id, NoDebug(Box::from(&b"garbage"[..])))
+		)
+		.is_empty()
+	);
 	assert_eq!(host.plugins[&id].plugin.param_normalized(GAIN), Some(1.0));
 }
 
@@ -342,10 +425,15 @@ fn open_editor(host: &mut Vst3Host, id: PluginId) -> window::Id {
 	hosted.plugin.create_editor().unwrap();
 	hosted
 		.plugin
-		.attach_editor(ParentWindow::native(std::ptr::without_provenance_mut(0x1000)))
+		.attach_editor(ParentWindow::native(std::ptr::without_provenance_mut(
+			0x1000,
+		)))
 		.unwrap();
 
-	run(host, Message::GuiOpened(id, NoClone(NoDebug(Box::new(Fragile::new(hosted))))));
+	run(
+		host,
+		Message::GuiOpened(id, NoClone(NoDebug(Box::new(Fragile::new(hosted))))),
+	);
 	assert!(host.plugins.contains_key(&id));
 
 	window
@@ -366,7 +454,10 @@ fn editors_follow_their_window() {
 	let window = open_editor(&mut host, id);
 
 	// the window sizes before the scale is known aren't the editor's
-	run(&mut host, Message::WindowResized(window, iced::Size::new(500.0, 400.0)));
+	run(
+		&mut host,
+		Message::WindowResized(window, iced::Size::new(500.0, 400.0)),
+	);
 	assert_eq!(editor_size(&host, id), Some(size(400, 300)));
 
 	// the editor is told how many pixels the screen has per point
@@ -374,10 +465,16 @@ fn editors_follow_their_window() {
 	assert_eq!(host.plugins[&id].plugin.param_normalized(6), Some(0.5));
 
 	// after that the window decides, within what the editor allows
-	run(&mut host, Message::WindowResized(window, iced::Size::new(433.0, 90.0)));
+	run(
+		&mut host,
+		Message::WindowResized(window, iced::Size::new(433.0, 90.0)),
+	);
 	assert_eq!(editor_size(&host, id), Some(size(430, 100)));
 
-	run(&mut host, Message::WindowResized(window, iced::Size::new(5000.0, 5000.0)));
+	run(
+		&mut host,
+		Message::WindowResized(window, iced::Size::new(5000.0, 5000.0)),
+	);
 	assert_eq!(editor_size(&host, id), Some(size(800, 600)));
 }
 
@@ -387,12 +484,30 @@ fn editors_can_ask_for_a_size() {
 	let id = add(&mut host, "Restarter");
 	let window = open_editor(&mut host, id);
 
-	run(&mut host, Message::MainThread(id, MainThreadMessage::ResizeEditor { width: 640, height: 480 }));
+	run(
+		&mut host,
+		Message::MainThread(
+			id,
+			MainThreadMessage::ResizeEditor {
+				width: 640,
+				height: 480,
+			},
+		),
+	);
 	assert_eq!(editor_size(&host, id), Some(size(640, 480)));
 
 	// without a window there's nothing to resize, and the editor stays as it is
 	run(&mut host, Message::WindowClosed(window));
-	run(&mut host, Message::MainThread(id, MainThreadMessage::ResizeEditor { width: 300, height: 300 }));
+	run(
+		&mut host,
+		Message::MainThread(
+			id,
+			MainThreadMessage::ResizeEditor {
+				width: 300,
+				height: 300,
+			},
+		),
+	);
 	assert_eq!(editor_size(&host, id), Some(size(640, 480)));
 }
 
@@ -430,7 +545,10 @@ fn an_editor_that_didnt_attach_is_replaced_by_the_parameters() {
 
 	// the plugin comes back from the window without having an editor
 	let hosted = host.plugins.remove(&id).unwrap();
-	run(&mut host, Message::GuiOpened(id, NoClone(NoDebug(Box::new(Fragile::new(hosted))))));
+	run(
+		&mut host,
+		Message::GuiOpened(id, NoClone(NoDebug(Box::new(Fragile::new(hosted))))),
+	);
 
 	assert!(!host.editor_windows.contains(&window));
 	let new_window = host.window_of_plugin[&id];

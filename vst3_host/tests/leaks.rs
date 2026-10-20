@@ -5,8 +5,8 @@ mod common;
 
 use dsp as _;
 use libloading as _;
-use raw_window_handle as _;
 use log as _;
+use raw_window_handle as _;
 use std::{path::Path, sync::Arc};
 use vst3 as _;
 use vst3_host::{ParentWindow, Plugin, descriptors, live_host_objects};
@@ -47,7 +47,9 @@ fn host_objects_are_released() {
 		assert_eq!(live_host_objects(), 3);
 
 		plugin
-			.attach_editor(ParentWindow::native(std::ptr::without_provenance_mut(0x1000)))
+			.attach_editor(ParentWindow::native(std::ptr::without_provenance_mut(
+				0x1000,
+			)))
 			.unwrap();
 		plugin.close_editor();
 		assert_eq!(live_host_objects(), 2);

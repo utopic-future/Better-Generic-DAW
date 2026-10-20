@@ -4,8 +4,8 @@ mod common;
 
 use dsp as _;
 use libloading as _;
-use raw_window_handle as _;
 use log as _;
+use raw_window_handle as _;
 use vst3 as _;
 use walkdir as _;
 
@@ -29,7 +29,13 @@ fn lists_descriptors() {
 	let names = descriptors.iter().map(|d| &*d.name).collect::<Vec<_>>();
 	assert_eq!(
 		names,
-		["Gain (vst3-rs example plugin)", "Probe", "Mono", "Synth", "Restarter"]
+		[
+			"Gain (vst3-rs example plugin)",
+			"Probe",
+			"Mono",
+			"Synth",
+			"Restarter"
+		]
 	);
 
 	for descriptor in &descriptors {
@@ -41,7 +47,10 @@ fn lists_descriptors() {
 		assert_eq!(descriptor.version.as_deref(), Some("1.2.3"));
 	}
 
-	let ids = descriptors.iter().map(|d| d.id).collect::<std::collections::HashSet<_>>();
+	let ids = descriptors
+		.iter()
+		.map(|d| d.id)
+		.collect::<std::collections::HashSet<_>>();
 	assert_eq!(ids.len(), 5);
 
 	assert!(!descriptors[0].is_instrument());
@@ -77,8 +86,11 @@ fn bad_bundles_fail_gracefully() {
 	// a bundle whose binary isn't a shared library
 	let garbage = dir.join("Garbage.vst3/Contents").join(common::ARCH_DIR);
 	std::fs::create_dir_all(&garbage).unwrap();
-	std::fs::write(garbage.join(common::binary_name("Garbage")), b"definitely not a library")
-		.unwrap();
+	std::fs::write(
+		garbage.join(common::binary_name("Garbage")),
+		b"definitely not a library",
+	)
+	.unwrap();
 	assert!(Module::load(&dir.join("Garbage.vst3")).is_err());
 
 	// a path that doesn't exist at all

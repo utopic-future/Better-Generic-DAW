@@ -45,8 +45,8 @@ pub use stream::{
 	get_input_ports, get_output_devices, get_output_ports,
 };
 pub use symphonia::core::io::MediaSource;
-pub use vst3_host;
 pub use track::Track;
 pub use transition::{Point, Transition};
+pub use vst3_host;
 
 pub type ThreadPool = utils::NoDebug<audio_graph::ThreadPool<Node>>;

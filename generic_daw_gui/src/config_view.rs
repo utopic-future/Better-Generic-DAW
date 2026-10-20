@@ -180,8 +180,7 @@ impl ConfigView {
 				if let DragEvent::Dropped {
 					index,
 					target_index,
-				} = event
-					&& index != target_index
+				} = event && index != target_index
 				{
 					self.config.sample_paths.shift_move(index, target_index);
 				}
@@ -202,8 +201,7 @@ impl ConfigView {
 				if let DragEvent::Dropped {
 					index,
 					target_index,
-				} = event
-					&& index != target_index
+				} = event && index != target_index
 				{
 					self.config.clap_paths.shift_move(index, target_index);
 				}

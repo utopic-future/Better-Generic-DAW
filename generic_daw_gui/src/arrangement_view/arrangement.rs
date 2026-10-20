@@ -11,10 +11,10 @@ use crate::{
 		track::Track,
 	},
 	clap_host::{self, PluginId},
-	plugin_descriptor::PluginDescriptor,
-	vst3_host,
 	config::Config,
 	daw::{self, FREEZES_DIR, format_now},
+	plugin_descriptor::PluginDescriptor,
+	vst3_host,
 };
 use generic_daw_core::{
 	AudioClip, AudioPreview, AudioProcessor, AudioThread, Batch, Channels, Clip, ClipId, Message,
@@ -418,7 +418,9 @@ impl Arrangement {
 		self.node_action(id, NodeAction::PluginInsert(index, Box::new(slot)));
 
 		let instruction = match plugin.core {
-			Core::Clap(plugin, receiver) => daw::Instruction::PluginAdd(plugin_id, plugin, receiver),
+			Core::Clap(plugin, receiver) => {
+				daw::Instruction::PluginAdd(plugin_id, plugin, receiver)
+			}
 			Core::Vst3(plugin, receiver) => {
 				daw::Instruction::Vst3PluginAdd(plugin_id, plugin, receiver)
 			}

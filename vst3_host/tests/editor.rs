@@ -59,8 +59,14 @@ fn plugins_without_an_editor() {
 	for name in ["Gain", "Probe", "Mono", "Synth"] {
 		let (mut plugin, _receiver) = plugin(name);
 
-		assert!(matches!(plugin.create_editor(), Err(Error::NoEditor)), "{name}");
-		assert!(matches!(plugin.attach_editor(window()), Err(Error::NoEditor)), "{name}");
+		assert!(
+			matches!(plugin.create_editor(), Err(Error::NoEditor)),
+			"{name}"
+		);
+		assert!(
+			matches!(plugin.attach_editor(window()), Err(Error::NoEditor)),
+			"{name}"
+		);
 		assert!(!plugin.has_editor_open());
 		assert_eq!(plugin.editor_size(), None);
 		assert!(!plugin.editor_can_resize());
@@ -102,7 +108,10 @@ fn attaching_shows_the_editor() {
 	assert_close(reported(&plugin, PARENT), 1.0);
 	assert_eq!(plugin.editor_size(), Some(size(400, 300)));
 
-	assert!(matches!(plugin.attach_editor(window()), Err(Error::EditorAttached)));
+	assert!(matches!(
+		plugin.attach_editor(window()),
+		Err(Error::EditorAttached)
+	));
 }
 
 #[test]
@@ -126,7 +135,10 @@ fn attaching_can_fail_and_be_tried_again() {
 			PlatformType::Hwnd
 		},
 	};
-	assert!(matches!(plugin.attach_editor(wrong), Err(Error::SetupFailed(..))));
+	assert!(matches!(
+		plugin.attach_editor(wrong),
+		Err(Error::SetupFailed(..))
+	));
 
 	plugin.attach_editor(window()).unwrap();
 	assert_close(reported(&plugin, ATTACHED), 1.0);
@@ -259,7 +271,7 @@ fn dropping_a_plugin_with_an_open_editor_removes_it_first() {
 
 mod windows {
 	use raw_window_handle::{
-		AppKitWindowHandle, HasWindowHandle, HandleError, RawWindowHandle, WaylandWindowHandle,
+		AppKitWindowHandle, HandleError, HasWindowHandle, RawWindowHandle, WaylandWindowHandle,
 		Win32WindowHandle, WindowHandle, XcbWindowHandle, XlibWindowHandle,
 	};
 	use std::{num::NonZero, ptr::NonNull};

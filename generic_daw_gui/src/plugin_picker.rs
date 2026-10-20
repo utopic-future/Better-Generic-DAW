@@ -1,3 +1,4 @@
+use crate::plugin_descriptor::PluginDescriptor;
 use crate::{
 	action::Action,
 	components::virtualized,
@@ -8,7 +9,6 @@ use crate::{
 	},
 	widget::LINE_HEIGHT,
 };
-use crate::plugin_descriptor::PluginDescriptor;
 use generic_daw_core::clap_host::{Category, Subcategory};
 use iced::{
 	Element, Fill, FillPortion, Font, Shrink, Task,
@@ -194,32 +194,30 @@ impl PluginPicker {
 													.wrapping(text::Wrapping::None)
 													.ellipsis(text::Ellipsis::End),
 												text(descriptor.version().unwrap_or_default())
-												.wrapping(text::Wrapping::None)
-												.ellipsis(text::Ellipsis::End)
-												.style(text::secondary)
-												.width(Fill),
+													.wrapping(text::Wrapping::None)
+													.ellipsis(text::Ellipsis::End)
+													.style(text::secondary)
+													.width(Fill),
 												text(descriptor.vendor().unwrap_or_default())
-.wrapping(text::Wrapping::None)
-.ellipsis(text::Ellipsis::Start)
-.style(text::secondary),
-text(descriptor.format())
-.wrapping(text::Wrapping::None)
-.style(text::secondary),
+													.wrapping(text::Wrapping::None)
+													.ellipsis(text::Ellipsis::Start)
+													.style(text::secondary),
+												text(descriptor.format())
+													.wrapping(text::Wrapping::None)
+													.style(text::secondary),
 											]
 											.spacing(5)
 											.padding(padding::horizontal(3)),
 										)
 										.padding(1)
 										.height(LINE_HEIGHT + 2.0)
-										.style(
-											container_with_radius(
-												selectable_box(
-													container::transparent,
-													i == self.hovered_option(),
-												),
-												5,
+										.style(container_with_radius(
+											selectable_box(
+												container::transparent,
+												i == self.hovered_option(),
 											),
-										),
+											5,
+										)),
 									)
 									.on_enter(Message::Hover(i))
 									.on_press(Message::Select)
@@ -306,11 +304,17 @@ text(descriptor.format())
 				.enumerate()
 				.filter(|(_, (descriptor, _))| {
 					self.categories.is_empty()
-						|| self.categories.iter().any(|&category| descriptor.in_category(category))
+						|| self
+							.categories
+							.iter()
+							.any(|&category| descriptor.in_category(category))
 				})
 				.filter(|(_, (descriptor, _))| {
 					self.subcategories.is_empty()
-						|| self.subcategories.iter().any(|&subcategory| descriptor.in_subcategory(subcategory))
+						|| self
+							.subcategories
+							.iter()
+							.any(|&subcategory| descriptor.in_subcategory(subcategory))
 				})
 				.filter(|(_, (_, (name, vendor)))| {
 					query.iter().all(|word| {

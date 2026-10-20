@@ -20,16 +20,24 @@ impl Plugin {
 	/// Asks for the plugin to be set up for audio.
 	pub fn activate_message(&self) -> daw::Message {
 		match self.descriptor {
-			PluginDescriptor::Clap(_) => daw::Message::ClapHost(clap_host_message::activate(self.id)),
-			PluginDescriptor::Vst3(_) => daw::Message::Vst3Host(vst3_host::Message::Activate(self.id)),
+			PluginDescriptor::Clap(_) => {
+				daw::Message::ClapHost(clap_host_message::activate(self.id))
+			}
+			PluginDescriptor::Vst3(_) => {
+				daw::Message::Vst3Host(vst3_host::Message::Activate(self.id))
+			}
 		}
 	}
 
 	/// Asks for the plugin's window to be shown.
 	pub fn gui_open_message(&self) -> daw::Message {
 		match self.descriptor {
-			PluginDescriptor::Clap(_) => daw::Message::ClapHost(clap_host_message::gui_open(self.id)),
-			PluginDescriptor::Vst3(_) => daw::Message::Vst3Host(vst3_host::Message::GuiOpen(self.id)),
+			PluginDescriptor::Clap(_) => {
+				daw::Message::ClapHost(clap_host_message::gui_open(self.id))
+			}
+			PluginDescriptor::Vst3(_) => {
+				daw::Message::Vst3Host(vst3_host::Message::GuiOpen(self.id))
+			}
 		}
 	}
 

@@ -35,7 +35,12 @@ const CLASS_ID: [u8; 16] = [
 #[test]
 fn vst3_plugins_round_trip() {
 	let state = vec![1, 2, 3, 4, 5];
-	let gdp = project([proto::Plugin::vst3(CLASS_ID, Some(state.clone()), 0.5, false)]);
+	let gdp = project([proto::Plugin::vst3(
+		CLASS_ID,
+		Some(state.clone()),
+		0.5,
+		false,
+	)]);
 
 	let plugins = plugins_of(&gdp);
 	assert_eq!(plugins.len(), 1);
@@ -73,10 +78,17 @@ fn formats_can_be_mixed_and_keep_their_order() {
 	]);
 
 	let plugins = plugins_of(&gdp);
-	let formats = plugins.iter().map(proto::Plugin::format).collect::<Vec<_>>();
+	let formats = plugins
+		.iter()
+		.map(proto::Plugin::format)
+		.collect::<Vec<_>>();
 	assert_eq!(
 		formats,
-		[proto::PluginFormat::Vst3, proto::PluginFormat::Clap, proto::PluginFormat::Vst3]
+		[
+			proto::PluginFormat::Vst3,
+			proto::PluginFormat::Clap,
+			proto::PluginFormat::Vst3
+		]
 	);
 	assert_eq!(plugins[0].vst3_id(), Some([1; 16]));
 	assert_eq!(plugins[2].vst3_id(), Some([2; 16]));
@@ -139,7 +151,10 @@ fn damaged_vst3_ids_are_refused() {
 		("no terminator", b"0".repeat(32)),
 		("empty", Vec::new()),
 	] {
-		let plugin = proto::Plugin { id, ..valid.clone() };
+		let plugin = proto::Plugin {
+			id,
+			..valid.clone()
+		};
 		assert_eq!(plugin.vst3_id(), None, "{name}");
 	}
 

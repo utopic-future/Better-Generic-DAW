@@ -7,8 +7,8 @@ mod common;
 
 use dsp as _;
 use libloading as _;
-use raw_window_handle as _;
 use log as _;
+use raw_window_handle as _;
 use std::{
 	ffi::{CStr, c_void},
 	ptr::{null, null_mut},
@@ -25,9 +25,7 @@ use vst3::{
 		kInvalidArgument, kResultOk,
 	},
 };
-use vst3_host::{
-	ComponentHandler, HOST_NAME, HostApplication, MainThreadMessage, RestartFlags,
-};
+use vst3_host::{ComponentHandler, HOST_NAME, HostApplication, MainThreadMessage, RestartFlags};
 use walkdir as _;
 
 fn host() -> ComPtr<IHostApplication> {
@@ -90,7 +88,9 @@ fn message_id_and_attributes_round_trip() {
 
 	// SAFETY:
 	// `c"hello"` is a valid, null-terminated string.
-	unsafe { message.setMessageID(c"hello".as_ptr()); }
+	unsafe {
+		message.setMessageID(c"hello".as_ptr());
+	}
 
 	// SAFETY:
 	// The message id is a valid, null-terminated string.
@@ -109,7 +109,10 @@ fn message_id_and_attributes_round_trip() {
 		assert_eq!(attributes.setFloat(c"float".as_ptr(), 1.5), kResultOk);
 
 		let string = utf16("héllo ✓");
-		assert_eq!(attributes.setString(c"string".as_ptr(), string.as_ptr()), kResultOk);
+		assert_eq!(
+			attributes.setString(c"string".as_ptr(), string.as_ptr()),
+			kResultOk
+		);
 
 		let data = [1u8, 2, 3, 4, 5];
 		assert_eq!(
@@ -122,7 +125,10 @@ fn message_id_and_attributes_round_trip() {
 		assert_eq!(int, -42);
 
 		let mut float = 0.0;
-		assert_eq!(attributes.getFloat(c"float".as_ptr(), &raw mut float), kResultOk);
+		assert_eq!(
+			attributes.getFloat(c"float".as_ptr(), &raw mut float),
+			kResultOk
+		);
 		assert_eq!(float, 1.5);
 
 		let mut buffer = [0u16; 32];
@@ -148,11 +154,20 @@ fn message_id_and_attributes_round_trip() {
 			attributes.getBinary(c"binary".as_ptr(), &raw mut ptr, &raw mut size),
 			kResultOk
 		);
-		assert_eq!(std::slice::from_raw_parts(ptr.cast::<u8>(), size as usize), &[1, 2, 3, 4, 5]);
+		assert_eq!(
+			std::slice::from_raw_parts(ptr.cast::<u8>(), size as usize),
+			&[1, 2, 3, 4, 5]
+		);
 
 		// asking for the wrong type, or for something that isn't there, fails
-		assert_eq!(attributes.getFloat(c"int".as_ptr(), &raw mut float), kInvalidArgument);
-		assert_eq!(attributes.getInt(c"missing".as_ptr(), &raw mut int), kInvalidArgument);
+		assert_eq!(
+			attributes.getFloat(c"int".as_ptr(), &raw mut float),
+			kInvalidArgument
+		);
+		assert_eq!(
+			attributes.getInt(c"missing".as_ptr(), &raw mut int),
+			kInvalidArgument
+		);
 		assert_eq!(attributes.setInt(null(), 1), kInvalidArgument);
 	}
 }
@@ -177,7 +192,10 @@ fn component_handler_forwards_to_the_channel() {
 	}
 
 	assert_eq!(receiver.try_recv(), Ok(MainThreadMessage::BeginEdit(7)));
-	assert_eq!(receiver.try_recv(), Ok(MainThreadMessage::PerformEdit(7, 0.25)));
+	assert_eq!(
+		receiver.try_recv(),
+		Ok(MainThreadMessage::PerformEdit(7, 0.25))
+	);
 	assert_eq!(receiver.try_recv(), Ok(MainThreadMessage::EndEdit(7)));
 
 	let Ok(MainThreadMessage::Restart(flags)) = receiver.try_recv() else {

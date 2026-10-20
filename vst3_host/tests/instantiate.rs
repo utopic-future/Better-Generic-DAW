@@ -4,8 +4,8 @@ mod common;
 
 use dsp as _;
 use libloading as _;
-use raw_window_handle as _;
 use log as _;
+use raw_window_handle as _;
 use std::{path::Path, sync::Arc};
 use vst3 as _;
 use vst3_host::{Error, Plugin, PluginDescriptor, descriptors};

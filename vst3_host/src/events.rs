@@ -1,7 +1,5 @@
 use std::mem::zeroed;
-use vst3::Steinberg::Vst::{
-	Event as RawEvent, Event_::EventTypes_, NoteOffEvent, NoteOnEvent,
-};
+use vst3::Steinberg::Vst::{Event as RawEvent, Event_::EventTypes_, NoteOffEvent, NoteOnEvent};
 
 /// Something that happens at a point in a block, in either direction.
 ///
@@ -33,9 +31,9 @@ impl Event {
 	#[must_use]
 	pub const fn time(&self) -> u32 {
 		match *self {
-			Self::NoteOn { time, .. } | Self::NoteOff { time, .. } | Self::ParamValue { time, .. } => {
-				time
-			}
+			Self::NoteOn { time, .. }
+			| Self::NoteOff { time, .. }
+			| Self::ParamValue { time, .. } => time,
 		}
 	}
 
@@ -47,7 +45,13 @@ impl Event {
 		raw.sampleOffset = sample_offset;
 
 		match self {
-			Self::NoteOn { channel, pitch, velocity, note_id, .. } => {
+			Self::NoteOn {
+				channel,
+				pitch,
+				velocity,
+				note_id,
+				..
+			} => {
 				raw.r#type = EventTypes_::kNoteOnEvent as u16;
 				raw.__field0.noteOn = NoteOnEvent {
 					channel,
@@ -58,7 +62,13 @@ impl Event {
 					noteId: note_id.unwrap_or(-1),
 				};
 			}
-			Self::NoteOff { channel, pitch, velocity, note_id, .. } => {
+			Self::NoteOff {
+				channel,
+				pitch,
+				velocity,
+				note_id,
+				..
+			} => {
 				raw.r#type = EventTypes_::kNoteOffEvent as u16;
 				raw.__field0.noteOff = NoteOffEvent {
 					channel,

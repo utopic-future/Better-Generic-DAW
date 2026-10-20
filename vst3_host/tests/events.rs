@@ -4,8 +4,8 @@ mod common;
 
 use dsp as _;
 use libloading as _;
-use raw_window_handle as _;
 use log as _;
+use raw_window_handle as _;
 use std::{path::Path, sync::Arc};
 use vst3 as _;
 use vst3_host::{AudioConfig, AudioThread, Event, Plugin, ProcessStatus, descriptors};
@@ -239,7 +239,14 @@ fn events_in_long_blocks_go_to_the_right_piece() {
 
 	// the output events use the time in the whole block
 	let out = audio.drain_output_events().collect::<Vec<_>>();
-	assert!(out.iter().any(|e| matches!(e, Event::NoteOn { time: 300, pitch: 72, .. })));
+	assert!(out.iter().any(|e| matches!(
+		e,
+		Event::NoteOn {
+			time: 300,
+			pitch: 72,
+			..
+		}
+	)));
 
 	plugin.deactivate(audio);
 }

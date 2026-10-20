@@ -39,17 +39,30 @@ impl AudioProcessor {
 		let sample_rate = clap.config().sample_rate as usize;
 		let max_frames = clap.config().max_frames_count as usize;
 
-		Self::with_backend(AudioBackend::Clap(clap), param_count, sample_rate, max_frames)
+		Self::with_backend(
+			AudioBackend::Clap(clap),
+			param_count,
+			sample_rate,
+			max_frames,
+		)
 	}
 
 	/// `param_count` is the number of parameters the plugin has, to size the queue of parameter
 	/// changes that go to the UI.
 	#[must_use]
-	pub fn create_vst3(vst3: Vst3AudioThread, param_count: usize) -> (Self, Consumer<(ClapId, f32)>) {
+	pub fn create_vst3(
+		vst3: Vst3AudioThread,
+		param_count: usize,
+	) -> (Self, Consumer<(ClapId, f32)>) {
 		let sample_rate = vst3.config().sample_rate as usize;
 		let max_frames = vst3.config().max_frames as usize;
 
-		Self::with_backend(AudioBackend::Vst3(vst3), param_count, sample_rate, max_frames)
+		Self::with_backend(
+			AudioBackend::Vst3(vst3),
+			param_count,
+			sample_rate,
+			max_frames,
+		)
 	}
 
 	fn with_backend(

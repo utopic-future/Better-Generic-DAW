@@ -6,11 +6,12 @@ use std::{
 use vst3::{
 	Class, ComWrapper,
 	Steinberg::{
+		FIDString,
 		Vst::{
-			IAttributeList, IAttributeListTrait, IAttributeList_::AttrID, IMessage,
-			IMessageTrait, TChar,
+			IAttributeList, IAttributeList_::AttrID, IAttributeListTrait, IMessage, IMessageTrait,
+			TChar,
 		},
-		FIDString, int64, kInvalidArgument, kResultOk, tresult, uint32,
+		int64, kInvalidArgument, kResultOk, tresult, uint32,
 	},
 };
 
@@ -60,18 +61,29 @@ impl Class for HostAttributeList {
 	type Interfaces = (IAttributeList,);
 }
 
-#[expect(clippy::renamed_function_params, reason = "the names of the trait's parameters aren't snake case")]
+#[expect(
+	clippy::renamed_function_params,
+	reason = "the names of the trait's parameters aren't snake case"
+)]
 impl IAttributeListTrait for HostAttributeList {
 	unsafe fn setInt(&self, id: AttrID, value: int64) -> tresult {
 		self.set(id, Attribute::Int(value))
 	}
 
 	unsafe fn getInt(&self, id: AttrID, value: *mut int64) -> tresult {
-		match self.with(id, |a| if let Attribute::Int(v) = a { Some(*v) } else { None }) {
+		match self.with(id, |a| {
+			if let Attribute::Int(v) = a {
+				Some(*v)
+			} else {
+				None
+			}
+		}) {
 			Some(v) if !value.is_null() => {
 				// SAFETY:
 				// `value` is non-null and the caller guarantees it points to an `int64`.
-				unsafe { *value = v; }
+				unsafe {
+					*value = v;
+				}
 				kResultOk
 			}
 			_ => kInvalidArgument,
@@ -83,11 +95,19 @@ impl IAttributeListTrait for HostAttributeList {
 	}
 
 	unsafe fn getFloat(&self, id: AttrID, value: *mut f64) -> tresult {
-		match self.with(id, |a| if let Attribute::Float(v) = a { Some(*v) } else { None }) {
+		match self.with(id, |a| {
+			if let Attribute::Float(v) = a {
+				Some(*v)
+			} else {
+				None
+			}
+		}) {
 			Some(v) if !value.is_null() => {
 				// SAFETY:
 				// `value` is non-null and the caller guarantees it points to an `f64`.
-				unsafe { *value = v; }
+				unsafe {
+					*value = v;
+				}
 				kResultOk
 			}
 			_ => kInvalidArgument,
@@ -124,7 +144,11 @@ impl IAttributeListTrait for HostAttributeList {
 		let capacity = size_in_bytes as usize / size_of::<TChar>();
 
 		let Some(units) = self.with(id, |a| {
-			if let Attribute::String(s) = a { Some(s.clone()) } else { None }
+			if let Attribute::String(s) = a {
+				Some(s.clone())
+			} else {
+				None
+			}
 		}) else {
 			return kInvalidArgument;
 		};
@@ -178,11 +202,15 @@ impl IAttributeListTrait for HostAttributeList {
 		// SAFETY:
 		// `data` is non-null. The pointer stays valid for as long as the attribute isn't
 		// overwritten, which is what the interface promises.
-		unsafe { *data = ptr.cast(); }
+		unsafe {
+			*data = ptr.cast();
+		}
 
 		// SAFETY:
 		// `size_in_bytes` is non-null.
-		unsafe { *size_in_bytes = len as uint32; }
+		unsafe {
+			*size_in_bytes = len as uint32;
+		}
 
 		kResultOk
 	}

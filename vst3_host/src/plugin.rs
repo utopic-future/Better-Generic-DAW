@@ -1,8 +1,7 @@
 use crate::{
-	AudioConfig, AudioThread, ComponentHandler, EditorSize, Error, MainThreadMessage,
-	MemoryStream, Module, ParamInfo, ParentWindow, PlatformType, PlugFrame, PluginDescriptor,
-	RestartActions, RestartFlags, buses::negotiate, host::HostApplication, state,
-	util::utf16_array_to_string,
+	AudioConfig, AudioThread, ComponentHandler, EditorSize, Error, MainThreadMessage, MemoryStream,
+	Module, ParamInfo, ParentWindow, PlatformType, PlugFrame, PluginDescriptor, RestartActions,
+	RestartFlags, buses::negotiate, host::HostApplication, state, util::utf16_array_to_string,
 };
 use log::warn;
 use std::{
@@ -10,7 +9,7 @@ use std::{
 	ffi::c_void,
 	fmt::{Debug, Formatter},
 	mem::zeroed,
-	ptr::{null_mut},
+	ptr::null_mut,
 	sync::{
 		Arc,
 		atomic::{AtomicBool, AtomicI32, Ordering::Relaxed},
@@ -21,14 +20,16 @@ use vst3::{
 	ComPtr, ComWrapper, Interface,
 	Steinberg::{
 		FUnknown, IBStream, IPlugFrame, IPlugView, IPlugViewContentScaleSupport,
-		IPlugViewContentScaleSupportTrait as _, IPlugViewTrait as _, IPluginBaseTrait as _, IPluginFactory, IPluginFactory3,
-		IPluginFactory3Trait as _, IPluginFactoryTrait as _, TUID, ViewRect, kInvalidArgument, kNotImplemented, kResultOk,
+		IPlugViewContentScaleSupportTrait as _, IPlugViewTrait as _, IPluginBaseTrait as _,
+		IPluginFactory, IPluginFactory3, IPluginFactory3Trait as _, IPluginFactoryTrait as _, TUID,
+		ViewRect,
 		Vst::{
 			IAudioProcessor, IAudioProcessorTrait as _, IComponent, IComponentHandler,
-			IComponentTrait as _, IoModes_, ProcessModes_, ProcessSetup, SymbolicSampleSizes_, ViewType,
-			IConnectionPoint, IConnectionPointTrait as _, IEditController,
-			IEditControllerTrait as _, ParameterInfo, String128,
+			IComponentTrait as _, IConnectionPoint, IConnectionPointTrait as _, IEditController,
+			IEditControllerTrait as _, IoModes_, ParameterInfo, ProcessModes_, ProcessSetup,
+			String128, SymbolicSampleSizes_, ViewType,
 		},
+		kInvalidArgument, kNotImplemented, kResultOk,
 	},
 };
 
@@ -39,11 +40,7 @@ fn create<I: Interface>(factory: &ComPtr<IPluginFactory>, cid: &[u8; 16]) -> Opt
 	// SAFETY:
 	// `cid` and `I::IID` are 16 bytes each, and `obj` is a valid out pointer.
 	let result = unsafe {
-		factory.createInstance(
-			cid.as_ptr().cast(),
-			I::IID.as_ptr().cast(),
-			&raw mut obj,
-		)
+		factory.createInstance(cid.as_ptr().cast(), I::IID.as_ptr().cast(), &raw mut obj)
 	};
 
 	if result != kResultOk {
@@ -128,7 +125,9 @@ impl Plugin {
 		if let Some(factory3) = factory.cast::<IPluginFactory3>() {
 			// SAFETY:
 			// `host_context` is a valid `FUnknown` that outlives the call.
-			unsafe { factory3.setHostContext(host_context.as_ptr()); }
+			unsafe {
+				factory3.setHostContext(host_context.as_ptr());
+			}
 		}
 
 		let component = create::<IComponent>(&factory, &descriptor.id)
@@ -223,7 +222,9 @@ impl Plugin {
 			// SAFETY:
 			// `handler` points to our handler, which outlives the controller's use of it, since
 			// `Drop` clears it again.
-			unsafe { controller.setComponentHandler(handler); }
+			unsafe {
+				controller.setComponentHandler(handler);
+			}
 		}
 
 		Ok(())
@@ -281,7 +282,9 @@ impl Plugin {
 
 		// SAFETY:
 		// `component` is a valid, initialized component. Plugins may refuse, which is fine.
-		unsafe { self.component.setIoMode(IoModes_::kSimple as i32); }
+		unsafe {
+			self.component.setIoMode(IoModes_::kSimple as i32);
+		}
 
 		let layout = negotiate(&self.component, &self.processor)?;
 
@@ -353,7 +356,9 @@ impl Plugin {
 
 			// SAFETY:
 			// `component` is a valid component, and processing was stopped above.
-			unsafe { self.component.setActive(0); }
+			unsafe {
+				self.component.setActive(0);
+			}
 		}
 	}
 
@@ -529,7 +534,8 @@ impl Plugin {
 
 			// SAFETY:
 			// `view` is a valid view, and the platform type is a valid string.
-			let supported = unsafe { view.isPlatformTypeSupported(PlatformType::native().to_fid()) };
+			let supported =
+				unsafe { view.isPlatformTypeSupported(PlatformType::native().to_fid()) };
 			if supported != kResultOk {
 				return Err(Error::UnsupportedEditorPlatform);
 			}
@@ -556,7 +562,9 @@ impl Plugin {
 
 		// SAFETY:
 		// `view` is a valid view, and `frame` outlives it, since both are in `editor`.
-		unsafe { editor.view.setFrame(frame); }
+		unsafe {
+			editor.view.setFrame(frame);
+		}
 
 		// SAFETY:
 		// `view` is a valid view. `parent` is up to the caller, as the window it points to.
@@ -564,7 +572,9 @@ impl Plugin {
 		if result != kResultOk {
 			// SAFETY:
 			// Passing null forgets the frame again.
-			unsafe { editor.view.setFrame(null_mut()); }
+			unsafe {
+				editor.view.setFrame(null_mut());
+			}
 
 			return Err(Error::SetupFailed("attaching the editor", result));
 		}
@@ -583,7 +593,12 @@ impl Plugin {
 	#[must_use]
 	pub fn editor_size(&self) -> Option<EditorSize> {
 		let editor = self.editor.as_ref()?;
-		let mut rect = ViewRect { left: 0, top: 0, right: 0, bottom: 0 };
+		let mut rect = ViewRect {
+			left: 0,
+			top: 0,
+			right: 0,
+			bottom: 0,
+		};
 
 		// SAFETY:
 		// `view` is a valid view and `rect` a valid out pointer.
@@ -619,7 +634,9 @@ impl Plugin {
 		// the plugin is allowed to adjust the size, and has to be told the size that's used
 		// SAFETY:
 		// `view` is a valid view and `rect` a valid pointer.
-		unsafe { editor.view.checkSizeConstraint(&raw mut rect); }
+		unsafe {
+			editor.view.checkSizeConstraint(&raw mut rect);
+		}
 
 		// SAFETY:
 		// `view` is a valid view and `rect` a valid pointer.
@@ -636,7 +653,9 @@ impl Plugin {
 
 			// SAFETY:
 			// `view` is a valid view and `rect` a valid pointer.
-			unsafe { editor.view.onSize(&raw mut rect); }
+			unsafe {
+				editor.view.onSize(&raw mut rect);
+			}
 		}
 	}
 
@@ -668,12 +687,16 @@ impl Plugin {
 		if editor.attached {
 			// SAFETY:
 			// `view` is a valid view that was attached.
-			unsafe { editor.view.removed(); }
+			unsafe {
+				editor.view.removed();
+			}
 		}
 
 		// SAFETY:
 		// Passing null forgets the frame.
-		unsafe { editor.view.setFrame(null_mut()); }
+		unsafe {
+			editor.view.setFrame(null_mut());
+		}
 	}
 
 	/// Reads the parameter list from the controller again. Call this after the plugin asks for
@@ -786,9 +809,8 @@ impl Plugin {
 
 		// SAFETY:
 		// `string` is null-terminated and `normalized` is a valid out pointer.
-		(unsafe {
-			controller.getParamValueByString(id, string.as_mut_ptr(), &raw mut normalized)
-		} == kResultOk)
+		(unsafe { controller.getParamValueByString(id, string.as_mut_ptr(), &raw mut normalized) }
+			== kResultOk)
 			.then(|| normalized.clamp(0.0, 1.0))
 	}
 
@@ -835,7 +857,6 @@ impl Plugin {
 	pub fn is_connected(&self) -> bool {
 		self.connection.is_some()
 	}
-
 }
 
 impl Drop for Plugin {
@@ -847,35 +868,47 @@ impl Drop for Plugin {
 		if self.active {
 			// SAFETY:
 			// `component` is a valid component. A leaked `AudioThread` is inert by now.
-			unsafe { self.component.setActive(0); }
+			unsafe {
+				self.component.setActive(0);
+			}
 		}
 
 		if let Some((component_point, controller_point)) = self.connection.take() {
 			// SAFETY:
 			// Both pointers are valid connection points.
-			unsafe { component_point.disconnect(controller_point.as_ptr()); }
+			unsafe {
+				component_point.disconnect(controller_point.as_ptr());
+			}
 
 			// SAFETY:
 			// Both pointers are valid connection points.
-			unsafe { controller_point.disconnect(component_point.as_ptr()); }
+			unsafe {
+				controller_point.disconnect(component_point.as_ptr());
+			}
 		}
 
 		if let Some(controller) = &self.controller {
 			// SAFETY:
 			// Passing null clears the handler.
-			unsafe { controller.setComponentHandler(null_mut()); }
+			unsafe {
+				controller.setComponentHandler(null_mut());
+			}
 
 			if self.controller_initialized {
 				// SAFETY:
 				// The controller was initialized and is terminated exactly once.
-				unsafe { controller.terminate(); }
+				unsafe {
+					controller.terminate();
+				}
 			}
 		}
 
 		if self.component_initialized {
 			// SAFETY:
 			// The component was initialized and is terminated exactly once.
-			unsafe { self.component.terminate(); }
+			unsafe {
+				self.component.terminate();
+			}
 		}
 	}
 }

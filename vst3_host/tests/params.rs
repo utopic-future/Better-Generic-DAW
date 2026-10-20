@@ -4,8 +4,8 @@ mod common;
 
 use dsp as _;
 use libloading as _;
-use raw_window_handle as _;
 use log as _;
+use raw_window_handle as _;
 use std::{path::Path, sync::Arc};
 use vst3 as _;
 use vst3_host::{ParamFlags, ParamInfo, Plugin, descriptors};
@@ -33,7 +33,11 @@ fn lists_all_parameters_in_order() {
 	let ids = plugin.params().iter().map(|p| p.id).collect::<Vec<_>>();
 	assert_eq!(ids, [0, BYPASS, MODE, METER, SECRET]);
 
-	let titles = plugin.params().iter().map(|p| &*p.title).collect::<Vec<_>>();
+	let titles = plugin
+		.params()
+		.iter()
+		.map(|p| &*p.title)
+		.collect::<Vec<_>>();
 	assert_eq!(titles, ["Gain", "Bypass", "Mode", "Meter", "Secret"]);
 }
 

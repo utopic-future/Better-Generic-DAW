@@ -47,7 +47,10 @@ impl Class for ParamValueQueue {
 	type Interfaces = (IParamValueQueue,);
 }
 
-#[expect(clippy::renamed_function_params, reason = "the names of the trait's parameters aren't snake case")]
+#[expect(
+	clippy::renamed_function_params,
+	reason = "the names of the trait's parameters aren't snake case"
+)]
 impl IParamValueQueueTrait for ParamValueQueue {
 	unsafe fn getParameterId(&self) -> ParamID {
 		self.id.get()
@@ -76,11 +79,15 @@ impl IParamValueQueueTrait for ParamValueQueue {
 
 		// SAFETY:
 		// Both pointers are non-null.
-		unsafe { *sample_offset = offset; }
+		unsafe {
+			*sample_offset = offset;
+		}
 
 		// SAFETY:
 		// Both pointers are non-null.
-		unsafe { *value = point; }
+		unsafe {
+			*value = point;
+		}
 
 		kResultOk
 	}
@@ -98,7 +105,9 @@ impl IParamValueQueueTrait for ParamValueQueue {
 		if !index.is_null() {
 			// SAFETY:
 			// `index` is non-null.
-			unsafe { *index = position as int32; }
+			unsafe {
+				*index = position as int32;
+			}
 		}
 
 		kResultOk
@@ -132,7 +141,10 @@ impl ParameterChanges {
 	fn queue_for(&self, id: u32) -> Option<usize> {
 		let used = self.used.get();
 
-		if let Some(position) = self.queues[..used].iter().position(|queue| queue.id.get() == id) {
+		if let Some(position) = self.queues[..used]
+			.iter()
+			.position(|queue| queue.id.get() == id)
+		{
 			return Some(position);
 		}
 
@@ -179,7 +191,11 @@ impl IParameterChangesTrait for ParameterChanges {
 			.map_or(std::ptr::null_mut(), |queue| queue.as_ptr())
 	}
 
-	unsafe fn addParameterData(&self, id: *const ParamID, index: *mut int32) -> *mut IParamValueQueue {
+	unsafe fn addParameterData(
+		&self,
+		id: *const ParamID,
+		index: *mut int32,
+	) -> *mut IParamValueQueue {
 		if id.is_null() {
 			return std::ptr::null_mut();
 		}
@@ -195,7 +211,9 @@ impl IParameterChangesTrait for ParameterChanges {
 		if !index.is_null() {
 			// SAFETY:
 			// `index` is non-null.
-			unsafe { *index = position as int32; }
+			unsafe {
+				*index = position as int32;
+			}
 		}
 
 		self.queues[position]

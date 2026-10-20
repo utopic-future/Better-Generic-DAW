@@ -63,7 +63,10 @@ impl Display for Error {
 				write!(f, "{what} failed (tresult {code})")
 			}
 			Self::UnsupportedBusLayout => {
-				write!(f, "the plugin's main audio buses are neither mono nor stereo")
+				write!(
+					f,
+					"the plugin's main audio buses are neither mono nor stereo"
+				)
 			}
 			Self::AlreadyActive => write!(f, "the plugin is already active"),
 			Self::NoEditor => write!(f, "the plugin has no editor"),

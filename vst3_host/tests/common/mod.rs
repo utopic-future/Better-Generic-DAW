@@ -8,7 +8,11 @@ use std::{
 
 /// The folder in a bundle that holds the binary, for this platform.
 pub const ARCH_DIR: &str = if cfg!(windows) {
-	if cfg!(target_arch = "aarch64") { "arm64-win" } else { "x86_64-win" }
+	if cfg!(target_arch = "aarch64") {
+		"arm64-win"
+	} else {
+		"x86_64-win"
+	}
 } else if cfg!(target_arch = "aarch64") {
 	"aarch64-linux"
 } else {
@@ -17,7 +21,11 @@ pub const ARCH_DIR: &str = if cfg!(windows) {
 
 /// The name of a bundle's binary for this platform.
 pub fn binary_name(stem: &str) -> String {
-	if cfg!(windows) { format!("{stem}.vst3") } else { format!("{stem}.so") }
+	if cfg!(windows) {
+		format!("{stem}.vst3")
+	} else {
+		format!("{stem}.so")
+	}
 }
 
 /// Builds the `test_plugin` crate and wraps it in a proper `.vst3` bundle layout.
@@ -48,7 +56,11 @@ pub fn plugin_dir() -> &'static Path {
 			.parent()
 			.unwrap()
 			.join("target/debug")
-			.join(if cfg!(windows) { "gain.dll" } else { "libgain.so" });
+			.join(if cfg!(windows) {
+				"gain.dll"
+			} else {
+				"libgain.so"
+			});
 
 		// only integration tests get a directory of their own to put things in
 		let base = option_env!("CARGO_TARGET_TMPDIR").map_or_else(

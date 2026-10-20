@@ -119,8 +119,7 @@ impl<Message> Widget<Message, Theme, Renderer> for ContextMenu<'_, Message> {
 		if let Event::Mouse(mouse::Event::ButtonPressed {
 			button: mouse::Button::Right,
 			..
-		}) = event
-			&& let Some(cursor) = cursor.position()
+		}) = event && let Some(cursor) = cursor.position()
 			&& layout.bounds().contains(cursor)
 		{
 			tree.state.downcast_mut::<State>().position = Some(cursor);
