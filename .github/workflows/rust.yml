@@ -2,7 +2,6 @@ name: rust
 on: [push, pull_request]
 jobs:
   check:
-    needs: fmt
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
