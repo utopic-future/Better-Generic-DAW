@@ -1,6 +1,8 @@
 use crate::{
 	action::Action,
-	clap_host::{self, ClapHost, PluginId},
+	clap_host::{ClapHost, PluginId},
+	plugin_descriptor::PluginDescriptor,
+	vst3_host::Vst3Host,
 	components::{icon_button, menu_entry, text_icon_button},
 	config::Config,
 	daw::{self, Tab},
@@ -26,7 +28,6 @@ use crate::{
 use generic_daw_core::{
 	AudioThread, Batch, Channels, MidiClip, MidiKey, MidiNote, MidiNoteId, MidiPatternId, NodeId,
 	PanMode, Point, PullSlot, SampleId, ThreadPool,
-	clap_host::PluginDescriptor,
 	time::{BeatRange, BeatTime, SecondsTime},
 };
 use generic_daw_project::proto;
@@ -376,14 +377,22 @@ impl ArrangementView {
 				{
 					let mut action = Action::instruction(instruction);
 					if show {
+						let (activate, open) = {
+							let plugin = self
+								.arrangement
+								.node(node)
+								.plugins
+								.iter()
+								.find(|candidate| candidate.id == plugin)
+								.unwrap();
+
+							(plugin.activate_message(), plugin.gui_open_message())
+						};
+
 						action = Action::batch([
 							action,
-							Action::instruction(daw::Instruction::Message(daw::Message::ClapHost(
-								clap_host::Message::Activate(plugin),
-							))),
-							Action::instruction(daw::Instruction::Message(daw::Message::ClapHost(
-								clap_host::Message::GuiOpen(plugin),
-							))),
+							Action::instruction(daw::Instruction::Message(activate)),
+							Action::instruction(daw::Instruction::Message(open)),
 						]);
 					}
 					return action;
@@ -392,9 +401,9 @@ impl ArrangementView {
 			Message::PluginRemove(node, i) => {
 				let plugin = self.arrangement.plugin_remove(node, i);
 				if !plugin.active {
-					return Action::instruction(daw::Instruction::Message(daw::Message::ClapHost(
-						clap_host::Message::DestroyInactive(plugin.id),
-					)));
+					return Action::instruction(daw::Instruction::Message(
+						plugin.destroy_inactive_message(),
+					));
 				}
 			}
 			Message::PluginMove(node, event) => {
@@ -413,15 +422,17 @@ impl ArrangementView {
 				}
 			}
 			Message::PluginSetState(node, i, state) => {
-				let plugin = self.arrangement.node(node).plugins[i].id;
-				return Action::instruction(daw::Instruction::Message(daw::Message::ClapHost(
-					clap_host::Message::SetState(plugin, state),
-				)));
+				let plugin = &self.arrangement.node(node).plugins[i];
+				return Action::instruction(daw::Instruction::Message(
+					plugin.set_state_message(state.0),
+				));
 			}
 			Message::PluginShow(plugin) => {
-				return Action::instruction(daw::Instruction::Message(daw::Message::ClapHost(
-					clap_host::Message::GuiOpen(plugin),
-				)));
+				if let Some((node, i)) = self.arrangement.plugin_of(plugin) {
+					return Action::instruction(daw::Instruction::Message(
+						self.arrangement.node(node).plugins[i].gui_open_message(),
+					));
+				}
 			}
 			Message::PluginMixChanged(node, i, mut mix) => {
 				if (mix.abs() - 0.5).abs() < 0.005 {
@@ -435,9 +446,7 @@ impl ArrangementView {
 				if plugin.active {
 					self.arrangement.plugin_deactivate(node, i);
 				} else {
-					return Action::instruction(daw::Instruction::Message(daw::Message::ClapHost(
-						clap_host::Message::Activate(plugin.id),
-					)));
+					return Action::instruction(daw::Instruction::Message(plugin.activate_message()));
 				}
 			}
 			Message::SampleLoaded(loaded) => {
@@ -1931,7 +1940,7 @@ impl ArrangementView {
 										.into(),
 									),
 									button(
-										text(&*plugin.descriptor.name)
+										text(plugin.descriptor.name())
 											.wrapping(text::Wrapping::None)
 											.ellipsis(text::Ellipsis::End)
 									)
@@ -2521,7 +2530,7 @@ impl ArrangementView {
 		}
 	}
 
-	pub fn save(&self, clap_host: &mut ClapHost) -> Vec<u8> {
+	pub fn save(&self, clap_host: &mut ClapHost, vst3_host: &Vst3Host) -> Vec<u8> {
 		let playlist = self.playlist.borrow();
 		let piano_roll = self.piano_roll.borrow();
 
@@ -2548,7 +2557,7 @@ impl ArrangementView {
 			},
 		};
 
-		self.arrangement.save(clap_host, view)
+		self.arrangement.save(clap_host, vst3_host, view)
 	}
 
 	pub fn change_config(&mut self) -> Task<Message> {

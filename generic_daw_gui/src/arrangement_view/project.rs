@@ -3,13 +3,15 @@
 use crate::{
 	arrangement_view::{self, Arrangement, crc, midi_pattern::MidiPatternPair, sample::SamplePair},
 	clap_host::ClapHost,
+	plugin_descriptor::PluginDescriptor,
+	vst3_host::Vst3Host,
 	config::Config,
 	daw::{self, Project},
 };
 use generic_daw_core::{
 	AudioClip, Channels, Clip, ClipId, MidiClip, MidiKey, MidiNote, MidiNoteId, NodeId, PanMode,
 	Point, Transition,
-	clap_host::{PluginDescriptor, StateContextType},
+	clap_host::StateContextType,
 	time::{BeatRange, BeatSpan, BeatTime, OffsetBeatRange, OffsetBeatSpan, SecondsTime},
 };
 use generic_daw_project::{Reader, Writer, proto};
@@ -34,7 +36,12 @@ pub enum Feedback<T> {
 }
 
 impl Arrangement {
-	pub fn save(&self, clap_host: &mut ClapHost, view: proto::ViewState) -> Vec<u8> {
+	pub fn save(
+		&self,
+		clap_host: &mut ClapHost,
+		vst3_host: &Vst3Host,
+		view: proto::ViewState,
+	) -> Vec<u8> {
 		let mut writer = Writer::new(proto::Transport {
 			bpm: self.transport().bpm.get().into(),
 			numerator: self.transport().numerator.get().into(),
@@ -134,14 +141,7 @@ impl Arrangement {
 						enable_midi: track.input.enable_midi,
 					}),
 					&node.name,
-					node.plugins.iter().map(|plugin| proto::Plugin {
-						id: plugin.descriptor.id.to_bytes_with_nul().to_owned(),
-						state: clap_host
-							.get_state(plugin.id, StateContextType::ForProject)
-							.map(Vec::from),
-						mix: plugin.mix,
-						active: plugin.active,
-					}),
+					node.plugins.iter().map(|plugin| save_plugin(plugin, clap_host, vst3_host)),
 					node.utility.volume,
 					match node.utility.pan {
 						PanMode::Stereo(pan) => proto::PanModeStereo { pan }.into(),
@@ -175,14 +175,7 @@ impl Arrangement {
 					self.node(node.id)
 						.plugins
 						.iter()
-						.map(|plugin| proto::Plugin {
-							id: plugin.descriptor.id.to_bytes_with_nul().to_owned(),
-							state: clap_host
-								.get_state(plugin.id, StateContextType::ForProject)
-								.map(Vec::from),
-							mix: plugin.mix,
-							active: plugin.active,
-						}),
+						.map(|plugin| save_plugin(plugin, clap_host, vst3_host)),
 					node.utility.volume,
 					match node.utility.pan {
 						PanMode::Stereo(pan) => proto::PanModeStereo { pan }.into(),
@@ -496,7 +489,18 @@ impl Arrangement {
 			for plugin in &channel.plugins {
 				let id = plugin.id();
 
-				let Some(descriptor) = plugins.iter().find(|d| *d.id == id) else {
+				let found = match plugin.format() {
+					proto::PluginFormat::Clap => plugins
+						.iter()
+						.find(|d| matches!(d, PluginDescriptor::Clap(clap) if *clap.id == id)),
+					proto::PluginFormat::Vst3 => plugin.vst3_id().and_then(|class_id| {
+						plugins.iter().find(
+							|d| matches!(d, PluginDescriptor::Vst3(vst3) if vst3.id == class_id),
+						)
+					}),
+				};
+
+				let Some(descriptor) = found else {
 					if ignored_plugins.contains(id) {
 						continue;
 					}
@@ -710,5 +714,29 @@ impl Arrangement {
 				.chain(Task::done(daw::Message::OpenedFile)),
 			])),
 		)
+	}
+}
+
+/// A plugin as it's saved in a project, whatever its format.
+fn save_plugin(
+	plugin: &super::plugin::Plugin,
+	clap_host: &mut ClapHost,
+	vst3_host: &Vst3Host,
+) -> proto::Plugin {
+	match &plugin.descriptor {
+		PluginDescriptor::Clap(descriptor) => proto::Plugin::clap(
+			&descriptor.id,
+			clap_host
+				.get_state(plugin.id, StateContextType::ForProject)
+				.map(Vec::from),
+			plugin.mix,
+			plugin.active,
+		),
+		PluginDescriptor::Vst3(descriptor) => proto::Plugin::vst3(
+			descriptor.id,
+			vst3_host.get_state(plugin.id),
+			plugin.mix,
+			plugin.active,
+		),
 	}
 }

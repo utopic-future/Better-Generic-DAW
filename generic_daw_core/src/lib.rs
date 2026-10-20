@@ -16,6 +16,8 @@ pub mod time;
 mod track;
 mod transition;
 mod voice_alloc;
+#[cfg(test)]
+mod vst3_tests;
 
 pub use audio_clip::AudioClip;
 pub use audio_graph::{NodeId, NodeImpl};
@@ -35,7 +37,7 @@ pub use midi_note::{Key, MidiKey, MidiNote, MidiNoteId};
 pub use midi_pattern::{MidiPattern, MidiPatternId};
 pub use midly::num::{u4, u7};
 pub use node::Node;
-pub use plugin::{AudioProcessor, AudioThreadMessage, Plugin};
+pub use plugin::{AudioBackend, AudioProcessor, AudioThreadMessage, Plugin};
 pub use sample::{Sample, SampleId};
 pub use slot::{PullSlot, PushSlot};
 pub use stream::{
@@ -43,6 +45,7 @@ pub use stream::{
 	get_input_ports, get_output_devices, get_output_ports,
 };
 pub use symphonia::core::io::MediaSource;
+pub use vst3_host;
 pub use track::Track;
 pub use transition::{Point, Transition};
 

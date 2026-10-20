@@ -30,6 +30,105 @@ pub enum Event {
 	},
 }
 
+impl Event {
+	/// The VST3 form of the event. VST3 has no flags and no note dialects.
+	///
+	/// Parameter values are passed on as they are, which means they have to be normalized
+	/// (`0.0..=1.0`) for VST3 plugins.
+	#[must_use]
+	pub fn to_vst3(self) -> vst3_host::Event {
+		let note_id = |note_id: Match<u32>| match note_id {
+			Match::Specific(id) => i32::try_from(id).ok(),
+			Match::All => None,
+		};
+
+		match self {
+			Self::On {
+				time,
+				key,
+				velocity,
+				note_id: id,
+				..
+			} => vst3_host::Event::NoteOn {
+				time,
+				channel: 0,
+				pitch: i16::from(key),
+				velocity,
+				note_id: note_id(id),
+			},
+			Self::Off {
+				time,
+				key,
+				velocity,
+				note_id: id,
+				..
+			} => vst3_host::Event::NoteOff {
+				time,
+				channel: 0,
+				pitch: i16::from(key),
+				velocity,
+				note_id: note_id(id),
+			},
+			Self::ParamValue {
+				time,
+				param_id,
+				value,
+				..
+			} => vst3_host::Event::ParamValue {
+				time,
+				id: param_id.get(),
+				value: f64::from(value),
+			},
+		}
+	}
+
+	/// The inverse of [`to_vst3`](Self::to_vst3), `None` for events that can't be represented
+	/// (notes outside of the MIDI range, and the one parameter id that CLAP reserves).
+	#[must_use]
+	pub fn from_vst3(event: vst3_host::Event) -> Option<Self> {
+		let note_id = |note_id: Option<i32>| {
+			note_id
+				.and_then(|id| u32::try_from(id).ok())
+				.map_or(Match::All, Match::Specific)
+		};
+
+		match event {
+			vst3_host::Event::NoteOn {
+				time,
+				pitch,
+				velocity,
+				note_id: id,
+				..
+			} => Some(Self::On {
+				time,
+				key: u8::try_from(pitch).ok()?,
+				velocity,
+				note_id: note_id(id),
+				flags: EventFlags::empty(),
+			}),
+			vst3_host::Event::NoteOff {
+				time,
+				pitch,
+				velocity,
+				note_id: id,
+				..
+			} => Some(Self::Off {
+				time,
+				key: u8::try_from(pitch).ok()?,
+				velocity,
+				note_id: note_id(id),
+				flags: EventFlags::empty(),
+			}),
+			vst3_host::Event::ParamValue { time, id, value } => Some(Self::ParamValue {
+				time,
+				param_id: ClapId::from_raw(id)?,
+				value: value as f32,
+				flags: EventFlags::empty(),
+			}),
+		}
+	}
+}
+
 impl audio_graph::EventImpl for Event {
 	fn time(&self) -> usize {
 		match *self {

@@ -8,7 +8,8 @@ use crate::{
 	},
 	widget::LINE_HEIGHT,
 };
-use generic_daw_core::clap_host::{Category, Feature, PluginDescriptor, Subcategory};
+use crate::plugin_descriptor::PluginDescriptor;
+use generic_daw_core::clap_host::{Category, Subcategory};
 use iced::{
 	Element, Fill, FillPortion, Font, Shrink, Task,
 	font::Weight,
@@ -47,15 +48,16 @@ impl State {
 
 impl State {
 	pub fn add(&mut self, descriptor: PluginDescriptor, plugin_picker: Option<&mut PluginPicker>) {
-		if let Err(i) = self
-			.options
-			.binary_search_by(|d| natural_cmp(d.name.as_bytes(), descriptor.name.as_bytes()))
-		{
+		// the same plugin in different formats are different options
+		if let Err(i) = self.options.binary_search_by(|d| {
+			natural_cmp(d.name().as_bytes(), descriptor.name().as_bytes())
+				.then(d.format_rank().cmp(&descriptor.format_rank()))
+		}) {
 			self.matchers.insert(
 				i,
 				(
-					build_matcher(&descriptor.name),
-					descriptor.vendor.as_deref().map(build_matcher),
+					build_matcher(descriptor.name()),
+					descriptor.vendor().map(build_matcher),
 				),
 			);
 			self.options.insert(i, descriptor);
@@ -188,28 +190,21 @@ impl PluginPicker {
 									mouse_area(
 										container(
 											row![
-												text(&*descriptor.name)
+												text(descriptor.name())
 													.wrapping(text::Wrapping::None)
 													.ellipsis(text::Ellipsis::End),
-												text(
-													descriptor
-														.version
-														.as_deref()
-														.unwrap_or_default(),
-												)
+												text(descriptor.version().unwrap_or_default())
 												.wrapping(text::Wrapping::None)
 												.ellipsis(text::Ellipsis::End)
 												.style(text::secondary)
 												.width(Fill),
-												text(
-													descriptor
-														.vendor
-														.as_deref()
-														.unwrap_or_default(),
-												)
-												.wrapping(text::Wrapping::None)
-												.ellipsis(text::Ellipsis::Start)
-												.style(text::secondary),
+												text(descriptor.vendor().unwrap_or_default())
+.wrapping(text::Wrapping::None)
+.ellipsis(text::Ellipsis::Start)
+.style(text::secondary),
+text(descriptor.format())
+.wrapping(text::Wrapping::None)
+.style(text::secondary),
 											]
 											.spacing(5)
 											.padding(padding::horizontal(3)),
@@ -311,17 +306,11 @@ impl PluginPicker {
 				.enumerate()
 				.filter(|(_, (descriptor, _))| {
 					self.categories.is_empty()
-						|| self.categories.iter().any(|&category| {
-							descriptor.features.contains(&Feature::Category(category))
-						})
+						|| self.categories.iter().any(|&category| descriptor.in_category(category))
 				})
 				.filter(|(_, (descriptor, _))| {
 					self.subcategories.is_empty()
-						|| self.subcategories.iter().any(|&subcategory| {
-							descriptor
-								.features
-								.contains(&Feature::Subcategory(subcategory))
-						})
+						|| self.subcategories.iter().any(|&subcategory| descriptor.in_subcategory(subcategory))
 				})
 				.filter(|(_, (_, (name, vendor)))| {
 					query.iter().all(|word| {

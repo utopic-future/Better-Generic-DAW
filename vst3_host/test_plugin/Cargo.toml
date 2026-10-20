@@ -1,0 +1,17 @@
+# A tiny VST3 plugin used only as a test fixture. `src/lib.rs` is the `gain` example from the
+# `vst3` crate (MIT OR Apache-2.0, (c) Micah Johnston), see `LICENSE-MIT`, with extra
+# parameters added to the controller to exercise discrete, list, read-only and hidden parameters.
+[package]
+name = "gain"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+vst3 = "0.3.0"
+
+# Not part of the main workspace.
+[workspace]

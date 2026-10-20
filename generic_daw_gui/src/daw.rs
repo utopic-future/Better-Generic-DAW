@@ -1,6 +1,8 @@
 use crate::{
 	arrangement_view::{self, Arrangement, ArrangementView, Feedback},
 	clap_host::{self, ClapHost, PluginId},
+	plugin_descriptor::PluginDescriptor,
+	vst3_host::{self, Vst3Host},
 	components::{menu_entry, number_input},
 	config::Config,
 	config_view::{self, ConfigView},
@@ -20,7 +22,7 @@ use crate::{
 use generic_daw_core::{
 	AudioThread, BpmTapper, NodeId, PullSlot, build_streams,
 	clap_host::{
-		ClapId, DEFAULT_CLAP_PATHS, MainThreadMessage, Plugin, PluginDescriptor, RenderMode,
+		ClapId, DEFAULT_CLAP_PATHS, MainThreadMessage, Plugin, RenderMode,
 		StateContextType,
 	},
 };
@@ -123,6 +125,17 @@ pub enum Instruction {
 	PluginCopyState(PluginId, PluginId),
 	PluginActivate(PluginId, clap_host::AudioThread),
 	PluginRestart(PluginId, Option<clap_host::AudioThread>),
+	Vst3PluginAdd(
+		PluginId,
+		generic_daw_core::vst3_host::Plugin,
+		Receiver<generic_daw_core::vst3_host::MainThreadMessage>,
+	),
+	/// The audio thread, and how many parameters the plugin has.
+	Vst3PluginActivate(PluginId, generic_daw_core::vst3_host::AudioThread, usize),
+	Vst3PluginRestart(
+		PluginId,
+		Option<(generic_daw_core::vst3_host::AudioThread, usize)>,
+	),
 	PluginParamChanged(PluginId, ClapId, f32),
 }
 
@@ -130,6 +143,7 @@ pub enum Instruction {
 pub enum Message {
 	Arrangement(Project, arrangement_view::Message),
 	ClapHost(clap_host::Message),
+	Vst3Host(vst3_host::Message),
 	FileTree(file_tree::Message),
 	PluginPicker(plugin_picker::Message),
 	ConfigView(config_view::Message),
@@ -299,6 +313,7 @@ pub struct Daw {
 
 	arrangement_view: ArrangementView,
 	clap_host: ClapHost,
+	vst3_host: Vst3Host,
 	file_tree: FileTree,
 	plugin_picker: Option<PluginPicker>,
 	config_view: Option<ConfigView>,
@@ -359,6 +374,7 @@ impl Daw {
 
 		let arrangement_view = ArrangementView::new(arrangement, &state, None);
 		let clap_host = ClapHost::new(main_window_id);
+		let vst3_host = Vst3Host::new();
 		let file_tree = FileTree::new(&config.sample_paths);
 		let recovering = state.recovery_project.is_some() || state.crash_log.is_some();
 		let bottom_pane = state.bottom_pane_split_at != 0.0;
@@ -370,6 +386,7 @@ impl Daw {
 
 			arrangement_view,
 			clap_host,
+			vst3_host,
 			file_tree,
 			config_view: None,
 			plugin_picker: None,
@@ -439,6 +456,14 @@ impl Daw {
 					.clap_host
 					.update(message, self.arrangement_view.arrangement.transport())
 					.handle(Message::ClapHost, |instruction| {
+						self.handle_instruction(instruction)
+					});
+			}
+			Message::Vst3Host(message) => {
+				return self
+					.vst3_host
+					.update(message, self.arrangement_view.arrangement.transport())
+					.handle(Message::Vst3Host, |instruction| {
 						self.handle_instruction(instruction)
 					});
 			}
@@ -618,7 +643,7 @@ impl Daw {
 			}
 			Message::SaveAsFile(path) => {
 				if let Err(err) =
-					std::fs::write(&path, self.arrangement_view.save(&mut self.clap_host))
+					std::fs::write(&path, self.arrangement_view.save(&mut self.clap_host, &self.vst3_host))
 				{
 					warn!("{err}");
 					return Task::none();
@@ -649,7 +674,7 @@ impl Daw {
 
 				let path =
 					Arc::<Path>::from(AUTOSAVED_DIR.join(format!("{} {}.gdp", name, format_now())));
-				let gdp = self.arrangement_view.save(&mut self.clap_host);
+				let gdp = self.arrangement_view.save(&mut self.clap_host, &self.vst3_host);
 
 				if let Some(last_path) = self
 					.state
@@ -799,11 +824,13 @@ impl Daw {
 				if self.progress.is_none() {
 					self.progress = Some(0.0);
 					self.clap_host.set_render_mode(RenderMode::Offline);
+				self.vst3_host.set_render_mode(RenderMode::Offline);
 					return self.arrangement_view.arrangement.render(&path);
 				}
 			}
 			Message::RenderedFile => {
 				self.clap_host.set_render_mode(RenderMode::Realtime);
+				self.vst3_host.set_render_mode(RenderMode::Realtime);
 				self.progress = None;
 			}
 			Message::TogglePluginPicker => {
@@ -863,13 +890,20 @@ impl Daw {
 
 				return Task::batch([
 					Task::future(unblock(move || {
-						let plugin_paths = clap_host::find_plugin_paths(
+						let clap_plugin_paths = clap_host::find_plugin_paths(
 							DEFAULT_CLAP_PATHS.iter().chain(&clap_paths),
 						)
 						.collect::<Box<_>>();
+						let vst3_plugin_paths =
+							generic_daw_core::vst3_host::find_plugin_paths(
+								generic_daw_core::vst3_host::DEFAULT_VST3_PATHS.iter(),
+							)
+							.collect::<Box<_>>();
 
-						let len = plugin_paths.len();
-						for (i, path) in plugin_paths.into_iter().enumerate() {
+						let len = clap_plugin_paths.len() + vst3_plugin_paths.len();
+						let mut done = 0;
+
+						let status = |path: &Path| {
 							sender
 								.try_send(Message::ScanStatus(
 									scan,
@@ -877,20 +911,45 @@ impl Daw {
 										.map(|name| format!("scanning {}", name.display()).into()),
 								))
 								.unwrap();
+						};
+
+						for path in clap_plugin_paths {
+							status(&path);
 
 							if let Some(descriptors) = Plugin::descriptors(&path) {
 								for descriptor in descriptors {
 									sender
 										.try_send(Message::PluginScanned(
 											scan,
-											Box::new(descriptor),
+											Box::new(PluginDescriptor::Clap(descriptor)),
 										))
 										.unwrap();
 								}
 							}
 
+							done += 1;
 							sender
-								.try_send(Message::ScanProgress(scan, (i + 1) as f32 / len as f32))
+								.try_send(Message::ScanProgress(scan, done as f32 / len as f32))
+								.unwrap();
+						}
+
+						for path in vst3_plugin_paths {
+							status(&path);
+
+							if let Some(descriptors) = generic_daw_core::vst3_host::descriptors(&path) {
+								for descriptor in descriptors {
+									sender
+										.try_send(Message::PluginScanned(
+											scan,
+											Box::new(PluginDescriptor::Vst3(descriptor)),
+										))
+										.unwrap();
+								}
+							}
+
+							done += 1;
+							sender
+								.try_send(Message::ScanProgress(scan, done as f32 / len as f32))
 								.unwrap();
 						}
 
@@ -1121,6 +1180,7 @@ impl Daw {
 			Instruction::Freeze(node) => {
 				self.progress = Some(0.0);
 				self.clap_host.set_render_mode(RenderMode::Offline);
+				self.vst3_host.set_render_mode(RenderMode::Offline);
 				return self.arrangement_view.arrangement.freeze(node, self.project);
 			}
 			Instruction::PluginLoad(descriptor) => {
@@ -1135,7 +1195,36 @@ impl Daw {
 					.plugin_add(id, plugin, receiver)
 					.map(Message::ClapHost);
 			}
+			Instruction::Vst3PluginAdd(id, plugin, receiver) => {
+				return self
+					.vst3_host
+					.plugin_add(id, plugin, receiver)
+					.map(Message::Vst3Host);
+			}
+			Instruction::Vst3PluginActivate(id, audio, params) => {
+				if let Some((node, index)) = self.arrangement_view.arrangement.plugin_of(id) {
+					return self
+						.arrangement_view
+						.arrangement
+						.plugin_activate_vst3(node, index, audio, params);
+				}
+			}
+			Instruction::Vst3PluginRestart(id, processor) => {
+				if let Some((node, index)) = self.arrangement_view.arrangement.plugin_of(id) {
+					return self
+						.arrangement_view
+						.arrangement
+						.plugin_restart_vst3(node, index, processor);
+				}
+			}
 			Instruction::PluginCopyState(from, to) => {
+				if let Some(state) = self.vst3_host.get_state(from) {
+					return self.update(Message::Vst3Host(vst3_host::Message::SetState(
+						to,
+						NoDebug(state.into_boxed_slice()),
+					)));
+				}
+
 				if let Some(state) = self
 					.clap_host
 					.get_state(from, StateContextType::ForDuplicate)
@@ -1217,6 +1306,10 @@ impl Daw {
 	pub fn view(&self, window: window::Id) -> Element<'_, Message> {
 		if let Some(gui) = self.clap_host.view(window) {
 			return gui.map(Message::ClapHost);
+		}
+
+		if let Some(gui) = self.vst3_host.view(window) {
+			return gui.map(Message::Vst3Host);
 		}
 
 		debug_assert_eq!(window, self.main_window_id);
@@ -1733,6 +1826,7 @@ impl Daw {
 	pub fn title(&self, window: window::Id) -> String {
 		self.clap_host
 			.title(window)
+			.or_else(|| self.vst3_host.title(window))
 			.or_else(|| {
 				self.current_project
 					.as_deref()
@@ -1750,6 +1844,7 @@ impl Daw {
 	pub fn scale_factor(&self, window: window::Id) -> f32 {
 		self.clap_host
 			.scale_factor(window)
+			.or_else(|| self.vst3_host.scale_factor(window))
 			.unwrap_or(self.config.scale_factor)
 	}
 
@@ -1760,6 +1855,7 @@ impl Daw {
 				.with(self.project)
 				.map(|(project, message)| Message::Arrangement(project, message)),
 			self.clap_host.subscription().map(Message::ClapHost),
+			Vst3Host::subscription().map(Message::Vst3Host),
 			if self.config.autosave.enabled && !self.recovering {
 				every(Duration::from_secs(
 					self.config.autosave.interval.get().into(),

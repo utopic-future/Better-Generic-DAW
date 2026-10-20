@@ -12,6 +12,7 @@ audio_graph.workspace = true
 clap_host.workspace = true
 dsp.workspace = true
 utils.workspace = true
+vst3_host.workspace = true
 
 cpal = { version = "0.18.2", features = ["asio", "pipewire"] }
 log = "0.4.34"

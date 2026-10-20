@@ -5,12 +5,14 @@ use crate::{
 		channel::Channel,
 		midi_pattern::{MidiPattern, MidiPatternPair},
 		node::{Node, NodeType},
-		plugin::{Plugin, PluginPair},
+		plugin::{Core, Plugin, PluginPair},
 		poll_consumer,
 		sample::{Sample, SamplePair},
 		track::Track,
 	},
 	clap_host::{self, PluginId},
+	plugin_descriptor::PluginDescriptor,
+	vst3_host,
 	config::Config,
 	daw::{self, FREEZES_DIR, format_now},
 };
@@ -19,7 +21,7 @@ use generic_daw_core::{
 	MidiClip, MidiKey, MidiNote, MidiNoteId, MidiPatternAction, MidiPatternId, NodeAction, NodeId,
 	NodeImpl as _, PanMode, Point, PullSlot, PushSlot, SampleId, Streams, ThreadPool,
 	TimedMidiAction, Transport, Update, Version, build_streams,
-	clap_host::{ClapId, HostInfo, PluginDescriptor},
+	clap_host::{ClapId, HostInfo},
 	time::{BeatRange, BeatTime, SecondsTime},
 };
 use hound::{WavSpec, WavWriter};
@@ -410,14 +412,19 @@ impl Arrangement {
 		descriptor: PluginDescriptor,
 		index: usize,
 	) -> Option<(PluginId, daw::Instruction)> {
-		let (plugin, slot, receiver) = PluginPair::new(descriptor, HOST.clone())?;
+		let (plugin, slot) = PluginPair::new(descriptor, HOST.clone())?;
 		let plugin_id = plugin.gui.id;
 		self.node_mut(id).plugins.insert(index, plugin.gui);
 		self.node_action(id, NodeAction::PluginInsert(index, Box::new(slot)));
-		Some((
-			plugin_id,
-			daw::Instruction::PluginAdd(plugin_id, plugin.core, receiver),
-		))
+
+		let instruction = match plugin.core {
+			Core::Clap(plugin, receiver) => daw::Instruction::PluginAdd(plugin_id, plugin, receiver),
+			Core::Vst3(plugin, receiver) => {
+				daw::Instruction::Vst3PluginAdd(plugin_id, plugin, receiver)
+			}
+		};
+
+		Some((plugin_id, instruction))
 	}
 
 	pub fn plugin_remove(&mut self, id: NodeId, index: usize) -> Plugin {
@@ -447,9 +454,9 @@ impl Arrangement {
 			)),
 			self.node(from).plugins[from_i]
 				.active
-				.then_some(daw::Instruction::Message(daw::Message::ClapHost(
-					clap_host::Message::Activate(self.node(to).plugins[to_i].id),
-				))),
+				.then_some(daw::Instruction::Message(
+					self.node(to).plugins[to_i].activate_message(),
+				)),
 		]
 		.into_iter()
 		.flatten()
@@ -523,6 +530,52 @@ impl Arrangement {
 				clap_host::Message::PluginParamValueChange(id, param_id, value)
 			}),
 		])
+	}
+
+	pub fn plugin_restart_vst3(
+		&mut self,
+		id: NodeId,
+		index: usize,
+		processor: Option<(generic_daw_core::vst3_host::AudioThread, usize)>,
+	) -> Task<daw::Message> {
+		self.node_mut(id).plugins[index].active = processor.is_some();
+		let (s, r) = oneshot::channel();
+		let s = std::mem::replace(&mut self.node_mut(id).plugins[index].s, s);
+		if let Some((audio, param_count)) = processor {
+			let (sender, receiver) = oneshot::async_channel();
+			let (processor, consumer) = AudioProcessor::create_vst3(audio, param_count);
+			s.send(PushSlot::new(
+				Some(Some(generic_daw_core::Plugin { processor, sender })),
+				r,
+			))
+			.unwrap();
+			let id = self.nodes[&id].plugins[index].id;
+			vst3_tasks(id, receiver, consumer)
+		} else {
+			s.send(PushSlot::new(Some(None), r)).unwrap();
+			Task::none()
+		}
+	}
+
+	pub fn plugin_activate_vst3(
+		&mut self,
+		id: NodeId,
+		index: usize,
+		audio: generic_daw_core::vst3_host::AudioThread,
+		param_count: usize,
+	) -> Task<daw::Message> {
+		self.node_mut(id).plugins[index].active = true;
+		let (sender, receiver) = oneshot::async_channel();
+		let (processor, consumer) = AudioProcessor::create_vst3(audio, param_count);
+		self.node_action(
+			id,
+			NodeAction::PluginActivate(
+				index,
+				Box::new(generic_daw_core::Plugin { processor, sender }),
+			),
+		);
+		let id = self.nodes[&id].plugins[index].id;
+		vst3_tasks(id, receiver, consumer)
 	}
 
 	pub fn plugin_deactivate(&mut self, id: NodeId, index: usize) {
@@ -1519,4 +1572,25 @@ impl Arrangement {
 			.chain(Task::done(daw::Message::RenderedFile)),
 		])
 	}
+}
+
+/// The tasks that bring what happens to a VST3 plugin on the audio thread back to the GUI.
+fn vst3_tasks(
+	id: PluginId,
+	receiver: oneshot::AsyncReceiver<generic_daw_core::AudioThreadMessage>,
+	consumer: rtrb::Consumer<(ClapId, f32)>,
+) -> Task<daw::Message> {
+	Task::batch([
+		Task::perform(receiver, move |message| {
+			daw::Message::Vst3Host(vst3_host::Message::AudioThread(
+				id,
+				NoClone(Box::new(message.unwrap())),
+			))
+		}),
+		Task::run(poll_consumer(consumer), move |(param_id, value)| {
+			daw::Message::Vst3Host(vst3_host::Message::PluginParamValueChange(
+				id, param_id, value,
+			))
+		}),
+	])
 }

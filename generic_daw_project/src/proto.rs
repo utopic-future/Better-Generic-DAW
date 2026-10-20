@@ -1,4 +1,4 @@
-use prost::{Message, Oneof};
+use prost::{Enumeration, Message, Oneof};
 use std::ffi::CStr;
 
 #[derive(Clone, Copy, Eq, Hash, Message, PartialEq)]
@@ -143,6 +143,19 @@ pub struct Plugin {
 	pub mix: f32,
 	#[prost(bool, default = true)]
 	pub active: bool,
+	/// Added later, files without it are CLAP plugins.
+	#[prost(enumeration = "PluginFormat", default = "Clap")]
+	pub format: i32,
+}
+
+/// The plugin format, and with it what [`Plugin::id`] means.
+#[derive(Clone, Copy, Debug, Enumeration, Eq, Hash, PartialEq)]
+#[repr(i32)]
+pub enum PluginFormat {
+	/// `id` is the plugin's CLAP id.
+	Clap = 0,
+	/// `id` is the 16 byte class id as 32 hex digits, see [`Plugin::vst3`].
+	Vst3 = 1,
 }
 
 #[derive(Clone, Copy, Message)]
@@ -290,9 +303,69 @@ pub struct Vector {
 }
 
 impl Plugin {
+	/// A CLAP plugin.
+	#[must_use]
+	pub fn clap(id: &CStr, state: Option<Vec<u8>>, mix: f32, active: bool) -> Self {
+		Self {
+			id: id.to_bytes_with_nul().to_vec(),
+			state,
+			mix,
+			active,
+			format: PluginFormat::Clap as i32,
+		}
+	}
+
+	/// A VST3 plugin, from its class id.
+	///
+	/// The id is stored as hex digits in a C string, which is what versions that don't know about
+	/// VST3 expect to find. They don't find such a plugin, and say so, instead of failing.
+	#[must_use]
+	pub fn vst3(class_id: [u8; 16], state: Option<Vec<u8>>, mix: f32, active: bool) -> Self {
+		let mut id = class_id
+			.iter()
+			.flat_map(|byte| {
+				[
+					b"0123456789ABCDEF"[usize::from(byte >> 4)],
+					b"0123456789ABCDEF"[usize::from(byte & 0xf)],
+				]
+			})
+			.collect::<Vec<_>>();
+		id.push(0);
+
+		Self {
+			id,
+			state,
+			mix,
+			active,
+			format: PluginFormat::Vst3 as i32,
+		}
+	}
+
+	/// The id as a C string, which for VST3 plugins is the class id in hex.
 	#[must_use]
 	pub fn id(&self) -> &CStr {
 		CStr::from_bytes_with_nul(&self.id).unwrap()
+	}
+
+	/// The VST3 class id, if this is a VST3 plugin with a valid one.
+	#[must_use]
+	pub fn vst3_id(&self) -> Option<[u8; 16]> {
+		if self.format() != PluginFormat::Vst3 {
+			return None;
+		}
+
+		let digits = self.id.strip_suffix(&[0])?;
+		if digits.len() != 32 {
+			return None;
+		}
+
+		let mut class_id = [0; 16];
+		for (byte, pair) in class_id.iter_mut().zip(digits.chunks_exact(2)) {
+			let digit = |c: u8| char::from(c).to_digit(16);
+			*byte = u8::try_from(digit(pair[0])? << 4 | digit(pair[1])?).ok()?;
+		}
+
+		Some(class_id)
 	}
 }
 

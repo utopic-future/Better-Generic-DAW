@@ -209,6 +209,23 @@ impl Transport {
 		}
 	}
 
+	/// The transport as VST3 plugins see it, with the position in samples and quarter notes.
+	#[must_use]
+	pub fn as_vst3(&self) -> vst3_host::Transport {
+		vst3_host::Transport {
+			playing: self.playing,
+			recording: false,
+			tempo: f64::from(self.bpm.get()),
+			time_sig_numerator: i32::from(self.numerator.get()),
+			time_sig_denominator: 4,
+			position_samples: self.position.to_frames(self) as i64,
+			position_quarters: self.position.to_beat_time(self).to_float(),
+			cycle: self
+				.loop_range
+				.map(|range| (range.start().to_float(), range.end().to_float())),
+		}
+	}
+
 	#[must_use]
 	pub fn as_clap(&self) -> TransportEvent {
 		TransportEvent {

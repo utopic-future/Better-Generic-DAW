@@ -284,8 +284,10 @@ impl ClapHost {
 				}
 			}
 			Message::WindowClosed(window) => {
-				let id = self.plugin_of_window.remove(&window).unwrap();
-				self.window_of_plugin.remove(&id).unwrap();
+				// every window is reported to every host, and most aren't ours
+				if let Some(id) = self.plugin_of_window.remove(&window) {
+					self.window_of_plugin.remove(&id);
+				}
 				self.scale_factor_of_window.remove(&window);
 			}
 		}

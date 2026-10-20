@@ -1,0 +1,16 @@
+[package]
+name = "vst3_host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+dsp.workspace = true
+log = "0.4.34"
+libloading = "0.8"
+raw-window-handle = "0.6.2"
+vst3 = "0.3.0"
+walkdir = "2.5.0"

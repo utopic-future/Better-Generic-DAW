@@ -18,10 +18,12 @@ mod file_tree;
 mod icons;
 mod lod;
 mod operation;
+mod plugin_descriptor;
 mod plugin_picker;
 mod state;
 mod stylefns;
 mod theme;
+mod vst3_host;
 mod widget;
 
 fn main() -> Result {

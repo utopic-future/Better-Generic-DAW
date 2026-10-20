@@ -2,6 +2,7 @@
 members = [
 	"audio_graph",
 	"clap_host", "dsp",
+	"vst3_host",
 	"generic_daw_core",
 	"generic_daw_gui",
 	"generic_daw_project",
@@ -15,6 +16,7 @@ resolver = "3"
 audio_graph.path = "audio_graph"
 clap_host.path = "clap_host"
 dsp.path = "dsp"
+vst3_host.path = "vst3_host"
 generic_daw_core.path = "generic_daw_core"
 generic_daw_project.path = "generic_daw_project"
 generic_daw_widget.path = "generic_daw_widget"
