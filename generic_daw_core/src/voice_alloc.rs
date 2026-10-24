@@ -1,5 +1,11 @@
 use std::{cmp::Ordering, fmt::Debug, num::NonZero};
 
+/// Note ID ranges:
+/// - Voice allocator (clip notes): 0 ..= i32::MAX - 32768
+/// - Live MIDI input: i32::MAX - 32767 ..= i32::MAX - 1
+/// This ensures no collision between clip-generated and live notes.
+const VOICE_ALLOC_MAX_NOTE_ID: u32 = (i32::MAX - 32768) as u32;
+
 #[derive(Clone, Copy, Debug)]
 pub struct Voice<Id, Info> {
 	pub id: Id,
@@ -69,17 +75,23 @@ impl<Id: Copy + Eq, Info: Copy> VoiceAlloc<Id, Info> {
 	) -> (Voice<Id, Info>, Voice<Id, Info>) {
 		let voice = self.new_voice(id, info);
 
-		let old_voice = std::mem::replace(
-			self.voices.iter_mut().min_by(|l, r| f(l, r)).unwrap(),
-			voice,
-		);
+		// Find the index of the voice to steal (avoid UB from mem::replace on reference)
+		let min_idx = self
+			.voices
+			.iter()
+			.enumerate()
+			.min_by(|(_, l), (_, r)| f(l, r))
+			.map(|(i, _)| i)
+			.unwrap();
+		let old_voice = std::mem::replace(&mut self.voices[min_idx], voice);
 
 		(voice, old_voice)
 	}
 
 	fn new_voice(&mut self, id: Id, info: Info) -> Voice<Id, Info> {
 		let note_id = self.next_note_id;
-		self.next_note_id = (self.next_note_id + 1) % (i32::MAX.cast_unsigned() - 16);
+		// Wrap within the voice allocator range to avoid collision with live MIDI notes
+		self.next_note_id = (self.next_note_id + 1) % VOICE_ALLOC_MAX_NOTE_ID;
 
 		Voice {
 			id,

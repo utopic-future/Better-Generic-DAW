@@ -30,6 +30,8 @@ pub enum Action {
 	DragSplit(BeatTime),
 	DragVelocity(f32),
 	Delete,
+	/// The mouse button was released, so a drag is over.
+	Finished,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -137,6 +139,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for PianoRoll<'a, Message
 				Status::DraggingSplit(..) => state.primary.extend(state.secondary.drain()),
 				_ => {}
 			}
+			shell.publish((self.action)(Action::Finished));
 			shell.capture_event();
 			shell.request_redraw();
 			return;
@@ -200,17 +203,15 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for PianoRoll<'a, Message
 			Event::Mouse(mouse::Event::ButtonPressed {
 				button: mouse::Button::Right,
 				modifiers,
-			}) if state.status == Status::None => {
+			}) if state.status == Status::None && modifiers.command() => {
 				let key = px_to_key(cursor.y, state.scale);
 				state.primary.clear();
 
-				if modifiers.command() {
-					let time = self
-						.grid
-						.maybe_snap(new_time, *modifiers, |time| time.round(snap_step));
+				let time = self
+					.grid
+					.maybe_snap(new_time, *modifiers, |time| time.round(snap_step));
 
-					state.status = Status::Selecting(key, key, time, time, true);
-				}
+				state.status = Status::Selecting(key, key, time, time, true);
 
 				shell.capture_event();
 				shell.request_redraw();

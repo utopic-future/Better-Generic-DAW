@@ -150,15 +150,20 @@ impl<W: Erased<Inject: Erased<Scratch = (), Inject = Infallible>>> ThreadPool<W>
 
 impl<W: Erased<Inject: Erased<Scratch = (), Inject = Infallible>>> Drop for ThreadPool<W> {
 	fn drop(&mut self) {
+		// Signal all workers to stop
 		self.shared.main.stop.store(true, Relaxed);
 		self.shared.main.epoch.fetch_add(1, Release);
 
+		// Wake all worker threads so they can process the stop signal
 		for thread in &self.threads {
 			thread.thread().unpark();
 		}
 
-		for thread in std::mem::take(&mut self.threads) {
-			thread.join().unwrap();
+		// Collect all threads and join them
+		// Wait indefinitely for threads to finish - they should respond to the stop signal
+		let threads = std::mem::take(&mut self.threads);
+		for thread in threads {
+			let _ = thread.join();
 		}
 	}
 }

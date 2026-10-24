@@ -21,6 +21,27 @@ use utils::{NoDebug, boxed_slice};
 
 pub static DEFAULT_HOST: LazyLock<HostId> = LazyLock::new(|| cpal::default_host().id());
 
+// Flush denormal numbers to zero to prevent audio crackling
+#[inline(always)]
+fn flush_denormals(samples: &mut [f32]) {
+	#[cfg(target_arch = "x86_64")]
+	{
+		use std::arch::x86_64::{_mm_setcsr, _mm_getcsr, _MM_FLUSH_ZERO_ON};
+		// Set FTZ (Flush To Zero) flag
+		// DAZ (Denormals Are Zero) might not be available on all CPUs/Rust versions
+		unsafe {
+			let csr = _mm_getcsr();
+			_mm_setcsr(csr | _MM_FLUSH_ZERO_ON);
+		}
+	}
+	// Also flush any existing denormals in the buffer
+	for sample in samples {
+		if sample.is_subnormal() {
+			*sample = 0.0;
+		}
+	}
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Channels {
 	pub left: u16,
@@ -189,7 +210,7 @@ pub fn build_streams(
 	sample_rate: Option<NonZero<u32>>,
 	frames: Option<NonZero<u32>>,
 	processor: PullSlot<(PullSlot<AudioThread>, ThreadPool)>,
-) -> (Streams, u16, NonZero<u16>, NonZero<u32>, NonZero<u32>) {
+) -> Result<(Streams, u16, NonZero<u16>, NonZero<u32>, NonZero<u32>), cpal::Error> {
 	let (midi_input, midi_consumer) = build_midi_input_connection(input_port);
 
 	let midi_output = build_midi_output_connection(output_port);
@@ -210,23 +231,33 @@ pub fn build_streams(
 		.and_then(|device| host.device_by_id(&device))
 		.filter(Device::supports_output)
 		.or_else(|| host.default_output_device())
-		.unwrap();
+		.ok_or(cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable))?;
 
 	let sample_rate = sample_rate
 		.filter(|sample_rate| {
 			output_device
 				.supported_output_configs()
-				.unwrap()
-				.any(|config| config.contains_rate(sample_rate.get()))
+				.is_ok_and(|mut configs| configs.any(|config| config.contains_rate(sample_rate.get())))
 		})
-		.or_else(|| NonZero::new(output_device.default_output_config().unwrap().sample_rate()))
-		.unwrap();
+		.or_else(|| {
+			output_device
+				.default_output_config()
+				.ok()
+				.and_then(|c| NonZero::new(c.sample_rate()))
+		})
+		.ok_or(cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable))?;
 
 	let frames = frames.filter(|frames| {
 		output_device
 			.supported_output_configs()
-			.unwrap()
-			.any(|config| matches!(config.buffer_size(), &SupportedBufferSize::Range { min, max } if (min..=max).contains(&frames.get())))
+			.is_ok_and(|mut configs| {
+				configs.any(|config| {
+					matches!(
+						config.buffer_size(),
+						&SupportedBufferSize::Range { min, max } if (min..=max).contains(&frames.get())
+					)
+				})
+			})
 	});
 
 	let (mut audio_input, input_channels, audio_consumer) =
@@ -241,15 +272,17 @@ pub fn build_streams(
 		midi_output,
 		midi_consumer,
 		audio_consumer,
-	);
+	)?;
 
 	if let Some(audio_input_stream) = &mut audio_input {
-		audio_input_stream.play().unwrap();
+		if let Err(e) = audio_input_stream.play() {
+			warn!("Failed to start input stream: {e}");
+		}
 	}
 
-	audio_output.play().unwrap();
+	audio_output.play()?;
 
-	(
+	Ok((
 		Streams {
 			_midi_input: midi_input,
 			_audio_input: audio_input,
@@ -259,7 +292,7 @@ pub fn build_streams(
 		output_channels,
 		sample_rate,
 		frames.or(NonZero::new(2048)).unwrap(),
-	)
+	))
 }
 
 fn build_midi_input_connection(
@@ -368,9 +401,9 @@ fn build_audio_input_stream(
 		};
 
 		let (producer, consumer) =
-			RingBuffer::new(usize::from(channels.get()) * sample_rate.get() as usize);
+			RingBuffer::new(usize::from(channels.get()) * sample_rate.get() as usize / 2);
 
-		let frames = frames.or(NonZero::new(2048)).unwrap();
+		let frames = frames.or(NonZero::new(256)).unwrap();
 		let mut audio_in = boxed_slice![0.0; frames.get() as usize * usize::from(channels.get())];
 
 		let mut callback = build_audio_input_callback(producer);
@@ -402,8 +435,12 @@ fn build_audio_input_stream(
 					SampleFormat::U24 => bridge!(U24),
 					SampleFormat::U32 => bridge!(u32),
 					SampleFormat::U64 => bridge!(u64),
-					SampleFormat::F32 => callback(data.as_slice().unwrap()),
-					SampleFormat::F64 => bridge!(f64),
+					SampleFormat::F32 => {
+						callback(data.as_slice().unwrap());
+					}
+					SampleFormat::F64 => {
+						bridge!(f64);
+					}
 					sample_format => panic!("unsupported sample format {sample_format}"),
 				}
 			},
@@ -442,22 +479,21 @@ fn build_audio_output_stream(
 	midi_output: Option<MidiOutputConnection>,
 	midi_consumer: Consumer<TimedMidiAction<u64>>,
 	audio_consumer: Consumer<f32>,
-) -> (NoDebug<Stream>, NonZero<u16>) {
+) -> Result<(NoDebug<Stream>, NonZero<u16>), cpal::Error> {
 	let channels = device
-		.supported_output_configs()
-		.unwrap()
+		.supported_output_configs()?
 		.map(|config| config.channels())
 		.max()
 		.and_then(NonZero::new)
-		.unwrap();
+		.ok_or_else(|| cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable))?;
 
 	let config = StreamConfig {
 		channels: channels.get(),
 		sample_rate: sample_rate.get(),
-		buffer_size: frames.map_or_default(|frames| BufferSize::Fixed(frames.get())),
+		buffer_size: frames.map_or(BufferSize::Default, |frames| BufferSize::Fixed(frames.get())),
 	};
 
-	let frames = frames.or(NonZero::new(2048)).unwrap();
+	let frames = frames.or(NonZero::new(256)).unwrap();
 	let mut audio_out = boxed_slice![0.0; frames.get() as usize * usize::from(channels.get())];
 
 	let mut callback = build_audio_output_callback(
@@ -471,46 +507,44 @@ fn build_audio_output_stream(
 		audio_consumer,
 	);
 
-	let audio_output = device
-		.build_output_stream_raw(
-			config,
-			device.default_output_config().unwrap().sample_format(),
-			move |data, _| {
-				macro_rules! bridge {
-					($ty:ty) => {{
-						let buf = data.as_slice_mut::<$ty>().unwrap();
-						for buf in buf.chunks_mut(audio_out.len()) {
-							audio_out[..buf.len()].fill(0.0);
-							callback(&mut audio_out[..buf.len()]);
-							for (audio_out, buf) in audio_out.iter().zip(buf) {
-								*buf = <$ty>::from_sample(*audio_out);
-							}
+	let audio_output = device.build_output_stream_raw(
+		config,
+		device.default_output_config().unwrap().sample_format(),
+		move |data, _| {
+			macro_rules! bridge {
+				($ty:ty) => {{
+					let buf = data.as_slice_mut::<$ty>().unwrap();
+					for buf in buf.chunks_mut(audio_out.len()) {
+						audio_out[..buf.len()].fill(0.0);
+						callback(&mut audio_out[..buf.len()]);
+						for (audio_out, buf) in audio_out.iter().zip(buf) {
+							*buf = <$ty>::from_sample(*audio_out);
 						}
-					}};
-				}
+					}
+				}};
+			}
 
-				match data.sample_format() {
-					SampleFormat::I8 => bridge!(i8),
-					SampleFormat::I16 => bridge!(i16),
-					SampleFormat::I24 => bridge!(I24),
-					SampleFormat::I32 => bridge!(i32),
-					SampleFormat::I64 => bridge!(i64),
-					SampleFormat::U8 => bridge!(u8),
-					SampleFormat::U16 => bridge!(u16),
-					SampleFormat::U24 => bridge!(U24),
-					SampleFormat::U32 => bridge!(u32),
-					SampleFormat::U64 => bridge!(u64),
-					SampleFormat::F32 => callback(data.as_slice_mut().unwrap()),
-					SampleFormat::F64 => bridge!(f64),
-					sample_format => panic!("unsupported sample format {sample_format}"),
-				}
-			},
-			|err| error!("{err}"),
-			None,
-		)
-		.unwrap();
+			match data.sample_format() {
+				SampleFormat::I8 => bridge!(i8),
+				SampleFormat::I16 => bridge!(i16),
+				SampleFormat::I24 => bridge!(I24),
+				SampleFormat::I32 => bridge!(i32),
+				SampleFormat::I64 => bridge!(i64),
+				SampleFormat::U8 => bridge!(u8),
+				SampleFormat::U16 => bridge!(u16),
+				SampleFormat::U24 => bridge!(U24),
+				SampleFormat::U32 => bridge!(u32),
+				SampleFormat::U64 => bridge!(u64),
+				SampleFormat::F32 => callback(data.as_slice_mut().unwrap()),
+				SampleFormat::F64 => bridge!(f64),
+				sample_format => panic!("unsupported sample format {sample_format}"),
+			}
+		},
+		|err| error!("{err}"),
+		None,
+	)?;
 
-	(audio_output.into(), channels)
+	Ok((audio_output.into(), channels))
 }
 
 fn build_audio_output_callback(
@@ -564,6 +598,9 @@ fn build_audio_output_callback(
 				&audio_in[..input_len],
 				audio_out,
 			);
+
+			// Flush denormals to prevent audio crackling
+			flush_denormals(audio_out);
 		}
 	}
 }

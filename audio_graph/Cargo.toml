@@ -7,9 +7,15 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+simd = []
+
 [dependencies]
 dsp.workspace = true
 utils.workspace = true
 thread_pool.workspace = true
 
 crossbeam-queue = "0.3.14"
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+raw-cpuid = { version = "10", optional = true }

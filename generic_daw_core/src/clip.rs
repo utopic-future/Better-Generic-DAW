@@ -6,7 +6,7 @@ use utils::unique_id;
 
 unique_id!(ClipId);
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Clip {
 	Audio(AudioClip),
 	Midi(MidiClip),

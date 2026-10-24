@@ -11,6 +11,9 @@ use std::{
 };
 use thread_pool::WorkList;
 
+#[cfg(feature = "simd")]
+use crate::simd;
+
 impl<Node: NodeImpl> WorkList for AudioGraph<Node> {
 	type Item = NodeId;
 	type Scratch = Node::Scratch;
@@ -46,7 +49,7 @@ impl<Node: NodeImpl> AudioGraph<Node> {
 		Self {
 			state,
 			graph: HashMap::new(),
-			queue: ArrayQueue::new(4),
+			queue: ArrayQueue::new(64),
 			max_frames,
 			curr_len: 0,
 			needs_reset: false,
@@ -182,44 +185,84 @@ impl<Node: NodeImpl> AudioGraph<Node> {
 			let latency_diff = max_latency - dep_entry.latency.load(Relaxed);
 			delay_line.resize(latency_diff);
 
-			let audio = if latency_diff == 0 {
-				&dep_buffers.audio[..self.curr_len]
+			let dst = &mut buffers.audio[..self.curr_len];
+			let mix_val = *mix;
+
+			if latency_diff == 0 {
+				let src = &dep_buffers.audio[..self.curr_len];
+				
+				if buffers_init {
+					// Mix: dst = dst + src * mix
+					#[cfg(feature = "simd")]
+					simd::mix_stereo_sse2(dst, src, mix_val);
+					#[cfg(not(feature = "simd"))]
+					for i in 0..self.curr_len {
+						dst[i][0] += src[i][0] * mix_val;
+						dst[i][1] += src[i][1] * mix_val;
+					}
+				} else {
+					// First input: dst = src * mix
+					#[cfg(feature = "simd")]
+					simd::copy_stereo_sse2(dst, src, mix_val);
+					#[cfg(not(feature = "simd"))]
+					for i in 0..self.curr_len {
+						dst[i][0] = src[i][0] * mix_val;
+						dst[i][1] = src[i][1] * mix_val;
+					}
+					buffers_init = true;
+				}
 			} else {
+				// Need delay line - use scratch buffer
 				let audio = Node::get_scratch_audio(scratch);
-				audio[..self.curr_len].copy_from_slice(&dep_buffers.audio[..self.curr_len]);
-				delay_line.advance_mut(&mut audio[..self.curr_len]);
-				&audio[..self.curr_len]
-			};
-
-			let iter = audio
-				.as_flattened()
-				.iter()
-				.zip(buffers.audio[..self.curr_len].as_flattened_mut());
-
-			if buffers_init {
-				iter.for_each(|(&sample, buf)| *buf += *mix * sample);
-			} else {
-				iter.for_each(|(&sample, buf)| *buf = *mix * sample);
-				buffers_init = true;
+				let src_scratch = &mut audio[..self.curr_len];
+				
+				// Copy to scratch
+				#[cfg(feature = "simd")]
+				simd::copy_to_scratch_sse2(src_scratch, &dep_buffers.audio[..self.curr_len]);
+				#[cfg(not(feature = "simd"))]
+				for i in 0..self.curr_len {
+					src_scratch[i][0] = dep_buffers.audio[i][0];
+					src_scratch[i][1] = dep_buffers.audio[i][1];
+				}
+				delay_line.advance_mut(src_scratch);
+				
+				if buffers_init {
+					#[cfg(feature = "simd")]
+					simd::mix_scratch_sse2(dst, src_scratch, mix_val);
+					#[cfg(not(feature = "simd"))]
+					for i in 0..self.curr_len {
+						dst[i][0] += src_scratch[i][0] * mix_val;
+						dst[i][1] += src_scratch[i][1] * mix_val;
+					}
+				} else {
+					#[cfg(feature = "simd")]
+					simd::copy_stereo_sse2(dst, src_scratch, mix_val);
+					#[cfg(not(feature = "simd"))]
+					for i in 0..self.curr_len {
+						dst[i][0] = src_scratch[i][0] * mix_val;
+						dst[i][1] = src_scratch[i][1] * mix_val;
+					}
+					buffers_init = true;
+				}
 			}
 
-			events.extend(
-				dep_buffers
-					.events
-					.iter()
-					.map(|e| e.at(e.time() + latency_diff)),
-			);
+			// Events: avoid allocations by using manual loop
+			for e in &dep_buffers.events {
+				let adjusted = e.at(e.time() + latency_diff);
+				if adjusted.time() < self.curr_len {
+					events.push(adjusted);
+				}
+			}
 
-			buffers.events.extend(events.extract_if(.., |e| {
-				e.time()
-					.checked_sub(self.curr_len)
-					.map(|time| *e = e.at(time))
-					.is_none()
-			}));
+			// Filter events in place - use retain for in-place filtering
+			events.retain(|e| e.time() < self.curr_len);
 		}
 
 		if !buffers_init {
-			buffers.audio[..self.curr_len].fill([0.0; 2]);
+			for i in 0..self.curr_len {
+				buffers.audio[i][0] = 0.0;
+				buffers.audio[i][1] = 0.0;
+			}
 		}
 
 		entry.latency.store(
@@ -371,7 +414,12 @@ impl<Node: NodeImpl> AudioGraph<Node> {
 			hash_map::Entry::Vacant(entry) => {
 				entry.insert(Entry::new(node, self.max_frames));
 				if self.queue.capacity() < self.graph.len() {
-					self.queue = ArrayQueue::new(2 * self.queue.capacity());
+					let mut new_queue = ArrayQueue::new(2 * self.queue.capacity());
+					// Drain old queue into new queue to avoid losing items
+					while let Some(item) = self.queue.pop() {
+						let _ = new_queue.push(item);
+					}
+					self.queue = new_queue;
 				}
 				None
 			}

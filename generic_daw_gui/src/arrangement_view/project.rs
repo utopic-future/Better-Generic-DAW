@@ -6,6 +6,7 @@ use crate::{
 	config::Config,
 	daw::{self, Project},
 	plugin_descriptor::PluginDescriptor,
+	vst2_host::Vst2Host,
 	vst3_host::Vst3Host,
 };
 use generic_daw_core::{
@@ -39,6 +40,7 @@ impl Arrangement {
 	pub fn save(
 		&self,
 		clap_host: &mut ClapHost,
+		vst2_host: &Vst2Host,
 		vst3_host: &Vst3Host,
 		view: proto::ViewState,
 	) -> Vec<u8> {
@@ -143,7 +145,7 @@ impl Arrangement {
 					&node.name,
 					node.plugins
 						.iter()
-						.map(|plugin| save_plugin(plugin, clap_host, vst3_host)),
+						.map(|plugin| save_plugin(plugin, clap_host, vst2_host, vst3_host)),
 					node.utility.volume,
 					match node.utility.pan {
 						PanMode::Stereo(pan) => proto::PanModeStereo { pan }.into(),
@@ -177,7 +179,7 @@ impl Arrangement {
 					self.node(node.id)
 						.plugins
 						.iter()
-						.map(|plugin| save_plugin(plugin, clap_host, vst3_host)),
+						.map(|plugin| save_plugin(plugin, clap_host, vst2_host, vst3_host)),
 					node.utility.volume,
 					match node.utility.pan {
 						PanMode::Stereo(pan) => proto::PanModeStereo { pan }.into(),
@@ -495,6 +497,11 @@ impl Arrangement {
 					proto::PluginFormat::Clap => plugins
 						.iter()
 						.find(|d| matches!(d, PluginDescriptor::Clap(clap) if *clap.id == id)),
+					proto::PluginFormat::Vst2 => plugin.vst2_id().and_then(|unique_id| {
+						plugins.iter().find(
+							|d| matches!(d, PluginDescriptor::Vst2(vst2) if vst2.unique_id == unique_id),
+						)
+					}),
 					proto::PluginFormat::Vst3 => plugin.vst3_id().and_then(|class_id| {
 						plugins.iter().find(
 							|d| matches!(d, PluginDescriptor::Vst3(vst3) if vst3.id == class_id),
@@ -723,6 +730,7 @@ impl Arrangement {
 fn save_plugin(
 	plugin: &super::plugin::Plugin,
 	clap_host: &mut ClapHost,
+	vst2_host: &Vst2Host,
 	vst3_host: &Vst3Host,
 ) -> proto::Plugin {
 	match &plugin.descriptor {
@@ -733,6 +741,12 @@ fn save_plugin(
 				.map(Vec::from),
 			plugin.mix,
 			plugin.active,
+		),
+		PluginDescriptor::Vst2(descriptor) => proto::Plugin::vst2(
+				descriptor.unique_id,
+				vst2_host.get_state(plugin.id),
+				plugin.mix,
+				plugin.active,
 		),
 		PluginDescriptor::Vst3(descriptor) => proto::Plugin::vst3(
 			descriptor.id,

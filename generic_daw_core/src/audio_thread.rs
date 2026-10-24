@@ -1,9 +1,10 @@
 use crate::{
 	Channel, Channels, Clip, ClipId, Event, MidiKey, MidiNote, MidiNoteId, MidiPattern,
 	MidiPatternId, Node, NodeId, PanMode, Plugin, Point, PullSlot, PushSlot, Sample, SampleId,
-	ThreadPool,
+	ThreadPool, vst2_host,
 	time::{BeatRange, BeatTime, SecondsTime},
 };
+use std::sync::atomic::{AtomicU8, Ordering};
 use audio_graph::{
 	self, AudioGraph,
 	thread_pool::{Injector, WorkList},
@@ -31,6 +32,10 @@ unique_id!(Version);
 
 static ON_BAR_CLICK: [f32; 2940] = include_f32s!("../../assets/on_bar_click.pcm");
 static OFF_BAR_CLICK: [f32; 2940] = include_f32s!("../../assets/off_bar_click.pcm");
+
+/// Pre-resampled metronome clicks for common sample rates
+/// Key = sample_rate, Value = (on_bar_click, off_bar_click) as Vec<[f32; 2]>
+type MetronomeCache = HashMap<u32, (Vec<[f32; 2]>, Vec<[f32; 2]>)>;
 
 #[derive(Debug)]
 pub enum Message {
@@ -102,6 +107,7 @@ impl MidiAction {
 pub enum NodeAction {
 	ClipAdd(Box<Clip>),
 	ClipRemove(ClipId),
+	ClipReplace(Box<Clip>),
 	ClipMoveTo(ClipId, BeatTime),
 	ClipTrimStartTo(ClipId, BeatTime),
 	ClipTrimEndTo(ClipId, BeatTime),
@@ -116,6 +122,7 @@ pub enum NodeAction {
 	ClipStretchEndTo(ClipId, BeatTime),
 	ClipReverse(ClipId),
 	ClipSlipTo(ClipId, BeatTime),
+	ClipVelocityChanged(ClipId, MidiNoteId, f32),
 
 	InputSetChannels(Channels),
 	InputSetAudioRecording(Option<Producer<[f32; 2]>>),
@@ -135,6 +142,9 @@ pub enum NodeAction {
 	PluginMoveTo(usize, usize),
 	PluginMixChanged(usize, f32),
 	PluginParamChanged(usize, ClapId, f32),
+
+	/// Starts or stops a note that is previewed through the node's instrument chain.
+	MidiPreview(Option<MidiPreview>),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -144,6 +154,7 @@ pub enum MidiPatternAction {
 	ChangeKey(MidiNoteId, MidiKey),
 	ChangeVelocity(MidiNoteId, f32),
 	MoveTo(MidiNoteId, BeatTime),
+	Replace(MidiNote),
 	TrimStartTo(MidiNoteId, BeatTime),
 	TrimEndTo(MidiNoteId, BeatTime),
 }
@@ -155,6 +166,7 @@ pub enum Update {
 	AudioRecordingInterrupted(NodeId),
 	MidiRecordingInterrupted(NodeId),
 	AudioPreviewEnded(Version),
+	MidiPreviewEnded(Version),
 	Peaks(NodeId, [f32; 2]),
 	Polyphony(NodeId, usize),
 	ConnectFailed(NodeId, NodeId),
@@ -226,6 +238,23 @@ impl Transport {
 		}
 	}
 
+	/// The transport as VST2 plugins see it, with the position in samples and quarter notes.
+	#[must_use]
+	pub fn as_vst2(&self) -> vst2_host::Transport {
+		vst2_host::Transport {
+			playing: self.playing,
+			recording: false,
+			tempo: f64::from(self.bpm.get()),
+			time_sig_numerator: i32::from(self.numerator.get()),
+			time_sig_denominator: 4,
+			position_samples: self.position.to_frames(self) as i64,
+			position_quarters: self.position.to_beat_time(self).to_float(),
+			cycle: self
+				.loop_range
+				.map(|range| (range.start().to_float(), range.end().to_float())),
+		}
+	}
+
 	#[must_use]
 	pub fn as_clap(&self) -> TransportEvent {
 		TransportEvent {
@@ -267,6 +296,10 @@ impl Transport {
 	}
 }
 
+/// Fixed-size array for playing notes: 16 channels × 128 keys = 2048 entries
+/// Index = channel * 128 + key, value = velocity (0 = not playing)
+const PLAYING_NOTES_CAPACITY: usize = 16 * 128;
+
 #[derive(Debug)]
 pub struct State {
 	pub transport: Transport,
@@ -275,20 +308,37 @@ pub struct State {
 	pub render_mode: RenderMode,
 	pub audio_input: Box<[f32]>,
 	pub midi_input: Vec<TimedMidiAction<u64>>,
-	pub playing: HashMap<(u4, u7), u7>,
+	pub playing: [AtomicU8; PLAYING_NOTES_CAPACITY],
+}
+
+impl Default for State {
+	fn default() -> Self {
+		Self {
+			transport: Transport::new(0, NonZero::new(2).unwrap(), NonZero::new(48000).unwrap(), NonZero::new(256).unwrap()),
+			samples: HashMap::new(),
+			midi_patterns: HashMap::new(),
+			render_mode: RenderMode::Realtime,
+			audio_input: Box::new([]),
+			midi_input: Vec::new(),
+			playing: std::array::from_fn(|_| AtomicU8::new(0)),
+		}
+	}
 }
 
 impl State {
 	fn reset(&mut self) {
-		self.midi_input
-			.extend(
-				self.playing
-					.drain()
-					.map(|((channel, key), velocity)| TimedMidiAction {
-						ts: 0,
-						action: MidiAction::NoteOff(channel, key, velocity),
-					}),
-			);
+		// Turn off all playing notes by pushing NoteOff events
+		for (idx, velocity_atomic) in self.playing.iter().enumerate() {
+			let velocity = velocity_atomic.swap(0, Ordering::Relaxed);
+			if velocity != 0 {
+				let channel = (idx / 128) as u8;
+				let key = (idx % 128) as u8;
+				self.midi_input.push(TimedMidiAction {
+					ts: 0,
+					action: MidiAction::NoteOff(u4::new(channel), u7::new(key), u7::new(velocity)),
+				});
+			}
+		}
 	}
 }
 
@@ -344,6 +394,50 @@ impl AudioPreview {
 	}
 }
 
+/// A note that is previewed through a track's instrument chain, without being recorded.
+///
+/// The note is turned on as soon as the audio thread picks the preview up, and turned off again
+/// after its duration has passed. A new preview cancels the one that came before it.
+#[derive(Clone, Copy, Debug)]
+pub struct MidiPreview {
+	version: Version,
+	key: MidiKey,
+	velocity: f32,
+	duration: SecondsTime,
+}
+
+impl MidiPreview {
+	#[must_use]
+	pub fn new(key: MidiKey, velocity: f32, duration: SecondsTime) -> Self {
+		Self {
+			version: Version::unique(),
+			key,
+			velocity,
+			duration,
+		}
+	}
+
+	#[must_use]
+	pub fn version(&self) -> Version {
+		self.version
+	}
+
+	#[must_use]
+	pub fn key(&self) -> MidiKey {
+		self.key
+	}
+
+	#[must_use]
+	pub fn velocity(&self) -> f32 {
+		self.velocity
+	}
+
+	#[must_use]
+	pub fn duration(&self) -> SecondsTime {
+		self.duration
+	}
+}
+
 #[derive(Debug)]
 pub struct AudioThread {
 	audio_graph: AudioGraph<Node>,
@@ -356,6 +450,7 @@ pub struct AudioThread {
 	needs_update: bool,
 	update_buffers: Vec<Vec<Update>>,
 	updates: Vec<Update>,
+	metronome_cache: MetronomeCache,
 }
 
 impl AudioThread {
@@ -383,14 +478,14 @@ impl AudioThread {
 				midi_input: Vec::with_capacity(
 					((31250 + 313) * frames.get() as usize).div_ceil(sample_rate.get() as usize),
 				),
-				playing: HashMap::with_capacity(16 * 128),
+				playing: std::array::from_fn(|_| AtomicU8::new(0)),
 			},
 			transport.frames,
 		);
 
 		audio_graph.insert(master_channel.into());
 
-		let processor = Self {
+		let mut processor = Self {
 			audio_graph,
 			master,
 			audio_preview: None,
@@ -401,9 +496,43 @@ impl AudioThread {
 			needs_update: false,
 			update_buffers: Vec::new(),
 			updates: Vec::new(),
+			metronome_cache: HashMap::new(),
 		};
 
+		// Pre-resample metronome clicks for the current sample rate
+		processor.resample_metronome(sample_rate.get());
+
 		(processor, master, transport)
+	}
+
+	fn resample_metronome(&mut self, sample_rate: u32) {
+		if self.metronome_cache.contains_key(&sample_rate) {
+			return;
+		}
+
+		let resample_ratio = 44100.0 / f64::from(sample_rate);
+		let click_len = ON_BAR_CLICK.len() / 2; // stereo frames
+
+		// Calculate output length: input_len / resample_ratio
+		let out_len = (click_len as f64 / resample_ratio).ceil() as usize;
+
+		let on_bar_resampled: Vec<[f32; 2]> = resample_cubic(
+			&ON_BAR_CLICK.as_chunks::<2>().0,
+			resample_ratio,
+			0,
+		)
+		.take(out_len)
+		.collect();
+
+		let off_bar_resampled: Vec<[f32; 2]> = resample_cubic(
+			&OFF_BAR_CLICK.as_chunks::<2>().0,
+			resample_ratio,
+			0,
+		)
+		.take(out_len)
+		.collect();
+
+		self.metronome_cache.insert(sample_rate, (on_bar_resampled, off_bar_resampled));
 	}
 
 	pub fn create_pool(&self) -> ThreadPool {
@@ -435,6 +564,12 @@ impl AudioThread {
 			self.state_mut().midi_input = Vec::with_capacity(
 				((31250 + 313) * frames.get() as usize).div_ceil(sample_rate.get() as usize),
 			);
+			// Clear playing notes to avoid stuck notes on sample rate change
+			for v in &mut self.state_mut().playing {
+				v.store(0, Ordering::Relaxed);
+			}
+			// Re-resample metronome for new sample rate
+			self.resample_metronome(sample_rate.get());
 		}
 
 		self.transport_mut().input_channels = input_channels;
@@ -576,19 +711,21 @@ impl AudioThread {
 
 			match action.action {
 				MidiAction::NoteOn(channel, key, velocity) => {
-					if let Some(velocity) =
-						self.state_mut().playing.insert((channel, key), velocity)
-					{
+					let idx = channel.as_int() as usize * 128 + key.as_int() as usize;
+					let prev_velocity = self.state_mut().playing[idx].swap(velocity.as_int(), Ordering::Relaxed);
+					if prev_velocity != 0 {
 						self.state_mut().midi_input.push(TimedMidiAction {
 							ts: action.ts,
-							action: MidiAction::NoteOff(channel, key, velocity),
+							action: MidiAction::NoteOff(channel, key, u7::new(prev_velocity)),
 						});
 					}
 
 					self.state_mut().midi_input.push(action);
 				}
 				MidiAction::NoteOff(channel, key, _) => {
-					if self.state_mut().playing.remove(&(channel, key)).is_some() {
+					let idx = channel.as_int() as usize * 128 + key.as_int() as usize;
+					let prev_velocity = self.state_mut().playing[idx].swap(0, Ordering::Relaxed);
+					if prev_velocity != 0 {
 						self.state_mut().midi_input.push(action);
 					}
 				}
@@ -647,9 +784,23 @@ impl AudioThread {
 		self.load_duration += now - start;
 		self.load_frames += frames;
 
+		const MAX_UPDATE_BATCH_SIZE: usize = 256;
+const MAX_UPDATE_BUFFERS: usize = 4;
+
 		if std::mem::take(&mut self.needs_update) || !self.updates.is_empty() {
+			// Bound the updates to prevent unbounded memory growth
+			if self.updates.len() > MAX_UPDATE_BATCH_SIZE {
+				self.updates.truncate(MAX_UPDATE_BATCH_SIZE);
+			}
+
 			if self.updates.is_empty() && self.updates.capacity() != 0 {
-				self.update_buffers.push(std::mem::take(&mut self.updates));
+				if self.update_buffers.len() < MAX_UPDATE_BUFFERS {
+					self.update_buffers.push(std::mem::take(&mut self.updates));
+				} else {
+					// Drop oldest buffer if at capacity
+					self.update_buffers.remove(0);
+					self.update_buffers.push(std::mem::take(&mut self.updates));
+				}
 			}
 
 			let batch = Batch {
@@ -662,7 +813,7 @@ impl AudioThread {
 			};
 
 			if let Err(PushError::Full(Batch {
-				updates,
+				mut updates,
 				load_duration,
 				load_frames,
 				..
@@ -670,6 +821,10 @@ impl AudioThread {
 			{
 				warn!("full ring buffer");
 				self.needs_update = true;
+				// Drop oldest updates to bound memory
+				if updates.len() > MAX_UPDATE_BATCH_SIZE {
+					updates.truncate(MAX_UPDATE_BATCH_SIZE);
+				}
 				self.updates = updates;
 				self.load_duration = load_duration;
 				self.load_frames = load_frames;
@@ -683,6 +838,16 @@ impl AudioThread {
 		if !self.transport().metronome || !self.transport().playing {
 			return;
 		}
+
+		let sample_rate = self.transport().sample_rate.get();
+		
+		// Ensure metronome is resampled for current sample rate
+		self.resample_metronome(sample_rate);
+		
+		let (on_bar_click, off_bar_click) = match self.metronome_cache.get(&sample_rate) {
+			Some((on, off)) => (on, off),
+			None => return, // Should not happen after resample_metronome call
+		};
 
 		let latency = self.audio_graph.latency(self.master);
 
@@ -700,12 +865,10 @@ impl AudioThread {
 		while click_beat < end_beat {
 			let numerator = self.transport().numerator.get();
 			let click = if click_beat.beat().is_multiple_of(numerator.into()) {
-				&ON_BAR_CLICK
+				on_bar_click
 			} else {
-				&OFF_BAR_CLICK
-			}
-			.as_chunks()
-			.0;
+				off_bar_click
+			};
 
 			let start = click_beat.to_frames(self.transport()) + latency;
 
@@ -716,9 +879,7 @@ impl AudioThread {
 
 			click_beat += BeatTime::BEAT;
 
-			let resample_ratio = 44100.0 / f64::from(self.transport().sample_rate.get());
-
-			let len = (click.len() as f64 / resample_ratio) as usize;
+			let len = click.len();
 
 			let play_pos = position.saturating_sub(start);
 			if play_pos >= len {
@@ -727,13 +888,13 @@ impl AudioThread {
 
 			self.audio_graph
 				.for_node_mut(self.master, |_, _, audio, _| {
-					resample_cubic(click, resample_ratio, play_pos)
-						.take(len - play_pos)
-						.zip(&mut audio[write_start..])
-						.for_each(|([l, r], audio)| {
-							audio[0] += l;
-							audio[1] += r;
-						});
+					let remaining = len - play_pos;
+					let copy_len = remaining.min(frames - write_start);
+					for (i, frame) in audio[write_start..write_start + copy_len].iter_mut().enumerate() {
+						let click_frame = click[play_pos + i];
+						frame[0] += click_frame[0];
+						frame[1] += click_frame[1];
+					}
 				});
 		}
 	}
@@ -751,7 +912,7 @@ impl AudioThread {
 				let play_pos = audio_preview.cursor.to_frames(&state.transport);
 				let len = sample.len(&state.transport).to_frames(&state.transport);
 
-				let resample_ratio = 1.0 / sample.resample_ratio(&state.transport);
+				let resample_ratio = sample.resample_ratio(&state.transport);
 
 				resample_cubic(&sample.samples, resample_ratio, play_pos)
 					.take(len - play_pos)

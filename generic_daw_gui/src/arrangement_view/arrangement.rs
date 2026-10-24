@@ -14,19 +14,20 @@ use crate::{
 	config::Config,
 	daw::{self, FREEZES_DIR, format_now},
 	plugin_descriptor::PluginDescriptor,
+	vst2_host,
 	vst3_host,
 };
 use generic_daw_core::{
 	AudioClip, AudioPreview, AudioProcessor, AudioThread, Batch, Channels, Clip, ClipId, Message,
-	MidiClip, MidiKey, MidiNote, MidiNoteId, MidiPatternAction, MidiPatternId, NodeAction, NodeId,
-	NodeImpl as _, PanMode, Point, PullSlot, PushSlot, SampleId, Streams, ThreadPool,
-	TimedMidiAction, Transport, Update, Version, build_streams,
+	MidiClip, MidiKey, MidiNote, MidiNoteId, MidiPatternAction, MidiPatternId, MidiPreview,
+	NodeAction, NodeId, NodeImpl as _, PanMode, Point, PullSlot, PushSlot, SampleId, Streams,
+	ThreadPool, TimedMidiAction, Transport, Update, Version, build_streams,
 	clap_host::{ClapId, HostInfo},
 	time::{BeatRange, BeatTime, SecondsTime},
 };
 use hound::{WavSpec, WavWriter};
 use iced::Task;
-use log::warn;
+use log::{error, warn};
 use rtrb::{Producer, PushError, RingBuffer};
 use smol::unblock;
 use std::{
@@ -59,6 +60,7 @@ pub struct Arrangement {
 	midi_patterns: BTreeMap<MidiPatternId, MidiPattern>,
 	solo: Option<NodeId>,
 	audio_preview: Option<(Version, SampleId)>,
+	midi_preview: Option<(Version, NodeId)>,
 
 	tracks: Vec<Track>,
 	channels: Vec<Channel>,
@@ -111,6 +113,7 @@ impl Arrangement {
 				midi_patterns: BTreeMap::new(),
 				solo: None,
 				audio_preview: None,
+				midi_preview: None,
 
 				tracks: Vec::new(),
 				channels: Vec::new(),
@@ -158,7 +161,7 @@ impl Arrangement {
 	) {
 		self.replace_streams(None);
 		let (sender, receiver) = oneshot::channel();
-		let (streams, input_channels, output_channels, sample_rate, frames) = build_streams(
+		let result = build_streams(
 			&config.audio.devices.as_core(),
 			config.midi.input.as_deref(),
 			config.midi.output.as_deref(),
@@ -166,6 +169,13 @@ impl Arrangement {
 			config.audio.buffer_size,
 			PullSlot::Empty(receiver),
 		);
+		let (streams, input_channels, output_channels, sample_rate, frames) = match result {
+			Ok(v) => v,
+			Err(e) => {
+				error!("Failed to build audio streams: {e}");
+				return;
+			}
+		};
 		self.replace_streams(Some(streams));
 
 		processor.change_config(input_channels, output_channels, sample_rate, frames);
@@ -235,6 +245,13 @@ impl Arrangement {
 						self.audio_preview = None;
 						self.remove_ref_sample(sample);
 						self.gc_sample(sample);
+					}
+				}
+				Update::MidiPreviewEnded(ended) => {
+					if let Some((version, _)) = self.midi_preview
+						&& version == ended
+					{
+						self.midi_preview = None;
 					}
 				}
 				Update::Peaks(node, peaks) => {
@@ -421,6 +438,9 @@ impl Arrangement {
 			Core::Clap(plugin, receiver) => {
 				daw::Instruction::PluginAdd(plugin_id, plugin, receiver)
 			}
+			Core::Vst2(plugin, receiver) => {
+				daw::Instruction::Vst2PluginAdd(plugin_id, plugin, receiver)
+			}
 			Core::Vst3(plugin, receiver) => {
 				daw::Instruction::Vst3PluginAdd(plugin_id, plugin, receiver)
 			}
@@ -495,14 +515,16 @@ impl Arrangement {
 			let id = self.nodes[&id].plugins[index].id;
 			Task::batch([
 				Task::perform(receiver, move |message| {
-					clap_host::Message::AudioThread(id, NoClone(Box::new(message.unwrap())))
+					clap_host::Message::AudioThread(id, NoClone(Box::new(message.expect("audio thread message channel closed in plugin_restart"))))
 				}),
 				Task::run(poll_consumer(consumer), move |(param_id, value)| {
 					clap_host::Message::PluginParamValueChange(id, param_id, value)
 				}),
 			])
 		} else {
-			s.send(PushSlot::new(Some(None), r)).unwrap();
+			if s.send(PushSlot::new(Some(None), r)).is_err() {
+				warn!("failed to send plugin restart none");
+			}
 			Task::none()
 		}
 	}
@@ -526,12 +548,60 @@ impl Arrangement {
 		let id = self.nodes[&id].plugins[index].id;
 		Task::batch([
 			Task::perform(receiver, move |message| {
-				clap_host::Message::AudioThread(id, NoClone(Box::new(message.unwrap())))
+				clap_host::Message::AudioThread(id, NoClone(Box::new(message.expect("audio thread message channel closed in plugin_activate"))))
 			}),
 			Task::run(poll_consumer(consumer), move |(param_id, value)| {
 				clap_host::Message::PluginParamValueChange(id, param_id, value)
 			}),
 		])
+	}
+
+	pub fn plugin_restart_vst2(
+		&mut self,
+		id: NodeId,
+		index: usize,
+		processor: Option<(generic_daw_core::vst2_host::AudioThread, usize)>,
+	) -> Task<daw::Message> {
+		self.node_mut(id).plugins[index].active = processor.is_some();
+		let (s, r) = oneshot::channel();
+		let s = std::mem::replace(&mut self.node_mut(id).plugins[index].s, s);
+		if let Some((audio, param_count)) = processor {
+			let (sender, receiver) = oneshot::async_channel();
+			let (processor, consumer) = AudioProcessor::create_vst2(audio, param_count);
+			s.send(PushSlot::new(
+				Some(Some(generic_daw_core::Plugin { processor, sender })),
+				r,
+			))
+			.unwrap();
+			let id = self.nodes[&id].plugins[index].id;
+			vst2_tasks(id, receiver, consumer)
+		} else {
+			if s.send(PushSlot::new(Some(None), r)).is_err() {
+				warn!("failed to send plugin restart none");
+			}
+			Task::none()
+		}
+	}
+
+	pub fn plugin_activate_vst2(
+		&mut self,
+		id: NodeId,
+		index: usize,
+		audio: generic_daw_core::vst2_host::AudioThread,
+		param_count: usize,
+	) -> Task<daw::Message> {
+		self.node_mut(id).plugins[index].active = true;
+		let (sender, receiver) = oneshot::async_channel();
+		let (processor, consumer) = AudioProcessor::create_vst2(audio, param_count);
+		self.node_action(
+			id,
+			NodeAction::PluginActivate(
+				index,
+				Box::new(generic_daw_core::Plugin { processor, sender }),
+			),
+		);
+		let id = self.nodes[&id].plugins[index].id;
+		vst2_tasks(id, receiver, consumer)
 	}
 
 	pub fn plugin_restart_vst3(
@@ -554,7 +624,9 @@ impl Arrangement {
 			let id = self.nodes[&id].plugins[index].id;
 			vst3_tasks(id, receiver, consumer)
 		} else {
-			s.send(PushSlot::new(Some(None), r)).unwrap();
+			if s.send(PushSlot::new(Some(None), r)).is_err() {
+				warn!("failed to send plugin restart none");
+			}
 			Task::none()
 		}
 	}
@@ -626,6 +698,29 @@ impl Arrangement {
 			.zip(sample);
 	}
 
+	/// Plays a note through the track's instrument chain, without recording it.
+	///
+	/// The note lasts for one beat, and is cut short when another note is previewed.
+	pub fn preview_midi_note(&mut self, id: NodeId, key: MidiKey, velocity: f32) {
+		let duration = BeatTime::BEAT.to_seconds_time(&self.transport);
+		let preview = MidiPreview::new(key, velocity, duration);
+
+		self.midi_preview = Some((preview.version(), id));
+
+		self.node_action(id, NodeAction::MidiPreview(Some(preview)));
+	}
+
+	/// Stops the note that is being previewed on the track, if any.
+	pub fn stop_midi_preview(&mut self, id: NodeId) {
+		if let Some((_, preview)) = self.midi_preview
+			&& preview == id
+		{
+			self.midi_preview = None;
+		}
+
+		self.node_action(id, NodeAction::MidiPreview(None));
+	}
+
 	pub fn set_bpm(&mut self, bpm: NonZero<u16>) {
 		if self.transport.bpm != bpm {
 			self.transport.bpm = bpm;
@@ -642,6 +737,10 @@ impl Arrangement {
 
 	pub fn stop(&mut self) {
 		self.set_audio_preview(None);
+
+		if let Some((_, id)) = self.midi_preview {
+			self.stop_midi_preview(id);
+		}
 
 		if self.transport.playing {
 			self.toggle_playback();
@@ -737,7 +836,7 @@ impl Arrangement {
 	}
 
 	fn node_mut(&mut self, id: NodeId) -> &mut Node {
-		self.nodes.get_mut(&id).unwrap()
+		self.nodes.get_mut(&id).expect("node not found")
 	}
 
 	fn add(&mut self, node: impl Into<generic_daw_core::Node>, ty: NodeType) -> NodeId {
@@ -759,7 +858,7 @@ impl Arrangement {
 			self.track_toggle_solo(id);
 		}
 		self.send(Message::NodeRemove(id, Box::new(MaybeUninit::uninit())));
-		self.nodes.remove(&id).unwrap()
+		self.nodes.remove(&id).expect("node not found")
 	}
 
 	pub fn add_channel(&mut self) -> NodeId {
@@ -776,7 +875,7 @@ impl Arrangement {
 	}
 
 	pub fn remove_channel(&mut self, id: NodeId) -> usize {
-		let index = self.channel_of(id).unwrap();
+		let index = self.channel_of(id).expect("channel not found");
 		self.channels.remove(index);
 		self.remove(id);
 		index
@@ -831,7 +930,7 @@ impl Arrangement {
 	}
 
 	pub fn duplicate_channel(&mut self, id: NodeId) -> (NodeId, Vec<daw::Instruction>) {
-		let new_id = self.insert_channel(self.channel_of(id).unwrap() + 1);
+		let new_id = self.insert_channel(self.channel_of(id).expect("channel not found in duplicate") + 1);
 		let instructions = self.copy_node(id, new_id);
 		(new_id, instructions)
 	}
@@ -863,7 +962,7 @@ impl Arrangement {
 	}
 
 	pub fn remove_track(&mut self, id: NodeId) -> usize {
-		let index = self.track_of(id).unwrap();
+		let index = self.track_of(id).expect("track not found");
 		let track = self.tracks.remove(index);
 		self.remove(id);
 		for clip in track.clips {
@@ -878,7 +977,7 @@ impl Arrangement {
 	}
 
 	pub fn duplicate_track(&mut self, id: NodeId) -> (NodeId, Vec<daw::Instruction>) {
-		let track = self.track_of(id).unwrap();
+		let track = self.track_of(id).expect("track not found");
 		let new_id = self.insert_track(track + 1);
 		let instructions = self.copy_node(id, new_id);
 		for clip in 0..self.tracks[track].clips.len() {
@@ -904,7 +1003,7 @@ impl Arrangement {
 				self.node_mut(id).ty = NodeType::Track;
 				self.send(Message::NodeToggleKind(id));
 
-				let index = self.channel_of(id).unwrap();
+				let index = self.channel_of(id).expect("channel not found");
 				self.channels.remove(index);
 
 				self.tracks.push(Track::new(
@@ -928,7 +1027,7 @@ impl Arrangement {
 				self.node_mut(id).ty = NodeType::Channel;
 				self.send(Message::NodeToggleKind(id));
 
-				let index = self.track_of(id).unwrap();
+				let index = self.track_of(id).expect("track not found");
 				let track = self.tracks.remove(index);
 
 				self.channels.insert(0, Channel::new(id));
@@ -944,7 +1043,7 @@ impl Arrangement {
 	}
 
 	pub fn input_change_channels(&mut self, id: NodeId, channels: Channels) {
-		let track = self.track_of(id).unwrap();
+		let track = self.track_of(id).expect("track not found");
 		if self.tracks[track].input != channels {
 			self.tracks[track].input = channels;
 			self.node_action(id, NodeAction::InputSetChannels(channels));
@@ -952,7 +1051,7 @@ impl Arrangement {
 	}
 
 	pub fn input_toggle_audio_recording(&mut self, id: NodeId) {
-		let track = self.track_of(id).unwrap();
+		let track = self.track_of(id).expect("track not found");
 		if self.tracks[track].audio_consumer.is_some() {
 			if let Some(recording) = &mut self.tracks[track].audio_recording
 				&& std::mem::replace(&mut recording.dropping, true)
@@ -968,7 +1067,7 @@ impl Arrangement {
 	}
 
 	pub fn input_toggle_midi_recording(&mut self, id: NodeId) {
-		let track = self.track_of(id).unwrap();
+		let track = self.track_of(id).expect("track not found");
 		if self.tracks[track].midi_consumer.is_some() {
 			if let Some(recording) = &mut self.tracks[track].midi_recording
 				&& std::mem::replace(&mut recording.dropping, true)
@@ -998,7 +1097,7 @@ impl Arrangement {
 
 	pub fn set_mix(&mut self, from: NodeId, to: NodeId, mix: f32) {
 		if self.node(from).outgoing[&to] != mix {
-			*self.node_mut(from).outgoing.get_mut(&to).unwrap() = mix;
+			*self.node_mut(from).outgoing.get_mut(&to).expect("mix not found") = mix;
 			self.send(Message::NodeSetMix(from, to, mix));
 		}
 	}
@@ -1030,38 +1129,50 @@ impl Arrangement {
 	}
 
 	fn add_ref_sample(&mut self, sample: SampleId) {
-		self.samples.get_mut(&sample).unwrap().refs += 1;
+		if let Some(s) = self.samples.get_mut(&sample) {
+			s.refs += 1;
+		}
 	}
 
 	fn remove_ref_sample(&mut self, sample: SampleId) {
-		self.samples.get_mut(&sample).unwrap().refs -= 1;
+		if let Some(s) = self.samples.get_mut(&sample) {
+			s.refs -= 1;
+		}
 	}
 
 	fn gc_sample(&mut self, sample: SampleId) {
-		if self.samples[&sample].refs == 0 {
-			self.samples.remove(&sample);
-			self.send(Message::SampleRemove(
-				sample,
-				Box::new(MaybeUninit::uninit()),
-			));
+		if let Some(s) = self.samples.get(&sample) {
+			if s.refs == 0 {
+				self.samples.remove(&sample);
+				self.send(Message::SampleRemove(
+					sample,
+					Box::new(MaybeUninit::uninit()),
+				));
+			}
 		}
 	}
 
 	fn add_ref_midi_pattern(&mut self, pattern: MidiPatternId) {
-		self.midi_patterns.get_mut(&pattern).unwrap().refs += 1;
+		if let Some(p) = self.midi_patterns.get_mut(&pattern) {
+			p.refs += 1;
+		}
 	}
 
 	fn remove_ref_midi_pattern(&mut self, pattern: MidiPatternId) {
-		self.midi_patterns.get_mut(&pattern).unwrap().refs -= 1;
+		if let Some(p) = self.midi_patterns.get_mut(&pattern) {
+			p.refs -= 1;
+		}
 	}
 
 	fn gc_midi_pattern(&mut self, pattern: MidiPatternId) {
-		if self.midi_patterns[&pattern].refs == 0 {
-			self.midi_patterns.remove(&pattern);
-			self.send(Message::MidiPatternRemove(
-				pattern,
-				Box::new(MaybeUninit::uninit()),
-			));
+		if let Some(p) = self.midi_patterns.get(&pattern) {
+			if p.refs == 0 {
+				self.midi_patterns.remove(&pattern);
+				self.send(Message::MidiPatternRemove(
+					pattern,
+					Box::new(MaybeUninit::uninit()),
+				));
+			}
 		}
 	}
 
@@ -1136,10 +1247,54 @@ impl Arrangement {
 	}
 
 	pub fn remove_clip(&mut self, track: usize, clip: usize) -> Clip {
-		let clip = self.tracks[track].clips.remove(clip);
-		self.node_action(self.tracks[track].id, NodeAction::ClipRemove(clip.id()));
+		let clip = self.detach_clip(track, clip);
 		self.remove_ref(clip);
 		clip
+	}
+
+	/// The track and index of a clip.
+	#[must_use]
+	pub fn clip_location(&self, id: ClipId) -> Option<(usize, usize)> {
+		self.tracks.iter().enumerate().find_map(|(track, clips)| {
+			clips
+				.clips
+				.iter()
+				.position(|clip| clip.id() == id)
+				.map(|clip| (track, clip))
+		})
+	}
+
+	/// Takes a clip out of a track without changing how many things use its sample
+	/// or pattern.
+	pub fn detach_clip(&mut self, track: usize, clip: usize) -> Clip {
+		let clip = self.tracks[track].clips.remove(clip);
+		self.node_action(self.tracks[track].id, NodeAction::ClipRemove(clip.id()));
+		clip
+	}
+
+	/// Puts a clip into a track without changing how many things use its sample or
+	/// pattern.
+	pub fn attach_clip(&mut self, track: usize, index: usize, clip: Clip) {
+		let index = index.min(self.tracks[track].clips.len());
+		self.tracks[track].clips.insert(index, clip);
+		self.node_action(self.tracks[track].id, NodeAction::ClipAdd(Box::new(clip)));
+	}
+
+	/// Replaces the contents of a clip, keeping its place in the track.
+	pub fn replace_clip(&mut self, track: usize, clip: usize, new: Clip) {
+		if self.tracks[track].clips[clip] != new {
+			self.tracks[track].clips[clip] = new;
+			self.node_action(
+				self.tracks[track].id,
+				NodeAction::ClipReplace(Box::new(new)),
+			);
+		}
+	}
+
+	/// Lets go of the sample or pattern a clip uses.
+	pub fn release_clip(&mut self, clip: Clip) {
+		self.remove_ref(clip);
+		self.gc(clip);
 	}
 
 	pub fn clip_switch_track(&mut self, track: usize, clip: usize, new_track: usize) -> usize {
@@ -1376,82 +1531,162 @@ impl Arrangement {
 	}
 
 	fn insert_note(&mut self, pattern: MidiPatternId, note: MidiNote, index: usize) -> usize {
-		self.midi_patterns
-			.get_mut(&pattern)
-			.unwrap()
-			.notes
-			.insert(index, note);
+		if let Some(p) = self.midi_patterns.get_mut(&pattern) {
+			p.notes.insert(index, note);
+		}
 		self.midi_pattern_action(pattern, MidiPatternAction::Add(note));
 		index
 	}
 
-	pub fn remove_note(&mut self, pattern: MidiPatternId, note: usize) -> MidiNote {
+	/// The index of a note.
+	#[must_use]
+	pub fn note_index(&self, pattern: MidiPatternId, id: MidiNoteId) -> Option<usize> {
+		self.midi_patterns
+			.get(&pattern)?
+			.notes
+			.iter()
+			.position(|note| note.id == id)
+	}
+
+	/// Puts a note into a pattern at an index.
+	pub fn insert_note_at(&mut self, pattern: MidiPatternId, index: usize, note: MidiNote) {
+		if let Some(p) = self.midi_patterns.get_mut(&pattern) {
+			let notes = &mut p.notes;
+			let index = index.min(notes.len());
+			notes.insert(index, note);
+		}
+		self.midi_pattern_action(pattern, MidiPatternAction::Add(note));
+	}
+
+	/// Replaces the contents of a note.
+	pub fn replace_note(&mut self, pattern: MidiPatternId, note: MidiNote) {
+		if let Some(p) = self.midi_patterns.get_mut(&pattern) {
+			if let Some(old) = p.notes.iter_mut().find(|old| old.id == note.id)
+				&& *old != note
+			{
+				*old = note;
+				self.midi_pattern_action(pattern, MidiPatternAction::Replace(note));
+			}
+		}
+	}
+
+	pub fn remove_note(&mut self, pattern: MidiPatternId, note: usize) -> Option<MidiNote> {
 		let note = self
 			.midi_patterns
-			.get_mut(&pattern)
-			.unwrap()
+			.get_mut(&pattern)?
 			.notes
 			.remove(note);
 		self.midi_pattern_action(pattern, MidiPatternAction::Remove(note.id));
-		note
+		Some(note)
 	}
 
 	pub fn note_change_velocity(&mut self, pattern: MidiPatternId, note: usize, velocity: f32) {
-		if self.midi_patterns[&pattern].notes[note].velocity != velocity {
-			self.midi_patterns.get_mut(&pattern).unwrap().notes[note].velocity = velocity;
-			self.midi_pattern_action(
-				pattern,
-				MidiPatternAction::ChangeVelocity(
-					self.midi_patterns[&pattern].notes[note].id,
-					velocity,
-				),
-			);
+		let mut note_id = None;
+		let mut should_send = false;
+		if let Some(p) = self.midi_patterns.get_mut(&pattern) {
+			if let Some(n) = p.notes.get_mut(note) {
+				if n.velocity != velocity {
+					n.velocity = velocity;
+					note_id = Some(n.id);
+					should_send = true;
+				}
+			}
+		}
+		if should_send {
+			if let Some(note_id) = note_id {
+				self.midi_pattern_action(
+					pattern,
+					MidiPatternAction::ChangeVelocity(note_id, velocity),
+				);
+			}
 		}
 	}
 
 	pub fn note_change_key(&mut self, pattern: MidiPatternId, note: usize, key: MidiKey) {
-		if self.midi_patterns[&pattern].notes[note].key != key {
-			self.midi_patterns.get_mut(&pattern).unwrap().notes[note].key = key;
-			self.midi_pattern_action(
-				pattern,
-				MidiPatternAction::ChangeKey(self.midi_patterns[&pattern].notes[note].id, key),
-			);
+		let mut note_id = None;
+		let mut should_send = false;
+		if let Some(p) = self.midi_patterns.get_mut(&pattern) {
+			if let Some(n) = p.notes.get_mut(note) {
+				if n.key != key {
+					n.key = key;
+					note_id = Some(n.id);
+					should_send = true;
+				}
+			}
+		}
+		if should_send {
+			if let Some(note_id) = note_id {
+				self.midi_pattern_action(
+					pattern,
+					MidiPatternAction::ChangeKey(note_id, key),
+				);
+			}
 		}
 	}
 
 	pub fn note_move_to(&mut self, pattern: MidiPatternId, note: usize, pos: BeatTime) {
-		if self.midi_patterns[&pattern].notes[note].position.start() != pos {
-			self.midi_patterns.get_mut(&pattern).unwrap().notes[note]
-				.position
-				.move_to(pos);
-			self.midi_pattern_action(
-				pattern,
-				MidiPatternAction::MoveTo(self.midi_patterns[&pattern].notes[note].id, pos),
-			);
+		let mut note_id = None;
+		let mut should_send = false;
+		if let Some(p) = self.midi_patterns.get_mut(&pattern) {
+			if let Some(n) = p.notes.get_mut(note) {
+				if n.position.start() != pos {
+					n.position.move_to(pos);
+					note_id = Some(n.id);
+					should_send = true;
+				}
+			}
+		}
+		if should_send {
+			if let Some(note_id) = note_id {
+				self.midi_pattern_action(
+					pattern,
+					MidiPatternAction::MoveTo(note_id, pos),
+				);
+			}
 		}
 	}
 
 	pub fn note_trim_start_to(&mut self, pattern: MidiPatternId, note: usize, pos: BeatTime) {
-		if self.midi_patterns[&pattern].notes[note].position.start() != pos {
-			self.midi_patterns.get_mut(&pattern).unwrap().notes[note]
-				.position
-				.trim_start_to(pos);
-			self.midi_pattern_action(
-				pattern,
-				MidiPatternAction::TrimStartTo(self.midi_patterns[&pattern].notes[note].id, pos),
-			);
+		let mut note_id = None;
+		let mut should_send = false;
+		if let Some(p) = self.midi_patterns.get_mut(&pattern) {
+			if let Some(n) = p.notes.get_mut(note) {
+				if n.position.start() != pos {
+					n.position.trim_start_to(pos);
+					note_id = Some(n.id);
+					should_send = true;
+				}
+			}
+		}
+		if should_send {
+			if let Some(note_id) = note_id {
+				self.midi_pattern_action(
+					pattern,
+					MidiPatternAction::TrimStartTo(note_id, pos),
+				);
+			}
 		}
 	}
 
 	pub fn note_trim_end_to(&mut self, pattern: MidiPatternId, note: usize, pos: BeatTime) {
-		if self.midi_patterns[&pattern].notes[note].position.end() != pos {
-			self.midi_patterns.get_mut(&pattern).unwrap().notes[note]
-				.position
-				.trim_end_to(pos);
-			self.midi_pattern_action(
-				pattern,
-				MidiPatternAction::TrimEndTo(self.midi_patterns[&pattern].notes[note].id, pos),
-			);
+		let mut note_id = None;
+		let mut should_send = false;
+		if let Some(p) = self.midi_patterns.get_mut(&pattern) {
+			if let Some(n) = p.notes.get_mut(note) {
+				if n.position.end() != pos {
+					n.position.trim_end_to(pos);
+					note_id = Some(n.id);
+					should_send = true;
+				}
+			}
+		}
+		if should_send {
+			if let Some(note_id) = note_id {
+				self.midi_pattern_action(
+					pattern,
+					MidiPatternAction::TrimEndTo(note_id, pos),
+				);
+			}
 		}
 	}
 
@@ -1469,7 +1704,7 @@ impl Arrangement {
 
 		let (progress_sender, progress_receiver) = smol::channel::bounded(1);
 		let mut writer = WavWriter::new(
-			BufWriter::new(File::create(path).unwrap()),
+			BufWriter::new(File::create(path).expect("failed to create wav file")),
 			WavSpec {
 				bits_per_sample: 32,
 				channels: 2,
@@ -1477,7 +1712,7 @@ impl Arrangement {
 				sample_rate: self.transport.sample_rate.get(),
 			},
 		)
-		.unwrap();
+		.expect("failed to create wav writer");
 
 		let (p_sender, receiver) = oneshot::channel();
 		let p_receiver = self.request_processor_and_pool(PullSlot::Empty(receiver));
@@ -1485,20 +1720,27 @@ impl Arrangement {
 		let master = self.master;
 		Task::batch([
 			Task::future(unblock(move || {
-				let (mut processor, mut pool) = p_receiver.recv().unwrap();
+				let (mut processor, mut pool) = match p_receiver.recv() {
+					Ok(v) => v,
+					Err(_) => {
+						warn!("failed to receive processor for freeze");
+						return daw::Message::RenderedFile;
+					}
+				};
 				processor.render(
 					&mut pool,
 					master,
 					beat_range,
 					|samples| {
 						for &[l, r] in samples {
-							writer.write_sample(l).unwrap();
-							writer.write_sample(r).unwrap();
+							if writer.write_sample(l).is_err() { warn!("failed to write sample"); }
+							if writer.write_sample(r).is_err() { warn!("failed to write sample"); }
 						}
 					},
-					|f| _ = progress_sender.force_send(f).unwrap(),
+					|f| { let _ = progress_sender.force_send(f); },
 				);
-				p_sender.send((PullSlot::Full(processor), pool)).unwrap();
+				if p_sender.send((PullSlot::Full(processor), pool)).is_err() { warn!("failed to send processor back"); }
+				daw::Message::RenderedFile
 			}))
 			.discard(),
 			Task::run(progress_receiver, |progress| {
@@ -1509,7 +1751,7 @@ impl Arrangement {
 	}
 
 	pub fn freeze(&mut self, node: NodeId, project: daw::Project) -> Task<daw::Message> {
-		let track = self.track_of(node).unwrap();
+		let track = self.track_of(node).expect("track not found in freeze");
 
 		let beat_range = if let Some(loop_range) = self.transport.loop_range {
 			loop_range
@@ -1549,15 +1791,21 @@ impl Arrangement {
 
 		Task::batch([
 			Task::future(unblock(move || {
-				let (mut processor, mut pool) = p_receiver.recv().unwrap();
+				let (mut processor, mut pool) = match p_receiver.recv() {
+					Ok(v) => v,
+					Err(_) => {
+						warn!("failed to receive processor for freeze");
+						return daw::Message::RenderedFile;
+					}
+				};
 				processor.render(
 					&mut pool,
 					node,
 					beat_range,
 					|samples| recording.recorded(samples),
-					|f| _ = progress_sender.force_send(f).unwrap(),
+					|f| { let _ = progress_sender.force_send(f); },
 				);
-				p_sender.send((PullSlot::Full(processor), pool)).unwrap();
+				if p_sender.send((PullSlot::Full(processor), pool)).is_err() { warn!("failed to send processor back"); }
 
 				daw::Message::Arrangement(
 					project,
@@ -1576,6 +1824,27 @@ impl Arrangement {
 	}
 }
 
+/// The tasks that bring what happens to a VST2 plugin on the audio thread back to the GUI.
+fn vst2_tasks(
+	id: PluginId,
+	receiver: oneshot::AsyncReceiver<generic_daw_core::AudioThreadMessage>,
+	consumer: rtrb::Consumer<(ClapId, f32)>,
+) -> Task<daw::Message> {
+	Task::batch([
+		Task::perform(receiver, move |message| {
+			daw::Message::Vst2Host(vst2_host::Message::AudioThread(
+				id,
+				NoClone(Box::new(message.expect("audio thread message channel closed in vst2_tasks"))),
+			))
+		}),
+		Task::run(poll_consumer(consumer), move |(param_id, value)| {
+			daw::Message::Vst2Host(vst2_host::Message::PluginParamValueChange(
+				id, param_id, value,
+			))
+		}),
+	])
+}
+
 /// The tasks that bring what happens to a VST3 plugin on the audio thread back to the GUI.
 fn vst3_tasks(
 	id: PluginId,
@@ -1586,7 +1855,7 @@ fn vst3_tasks(
 		Task::perform(receiver, move |message| {
 			daw::Message::Vst3Host(vst3_host::Message::AudioThread(
 				id,
-				NoClone(Box::new(message.unwrap())),
+				NoClone(Box::new(message.expect("audio thread message channel closed in vst3_tasks"))),
 			))
 		}),
 		Task::run(poll_consumer(consumer), move |(param_id, value)| {

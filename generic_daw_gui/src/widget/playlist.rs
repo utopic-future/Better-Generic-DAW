@@ -52,6 +52,42 @@ pub enum Action {
 	DragSplit(BeatTime),
 	DragSlip(Delta<BeatTime>),
 	Delete,
+	/// The mouse button was released, so a drag is over.
+	Finished,
+}
+
+/// What the user right-clicked on.
+#[derive(Clone, Copy, Debug)]
+pub enum ContextTarget {
+	/// An audio clip, with the track it is in and the index of the clip.
+	AudioClip(usize, usize),
+	/// A MIDI clip, with the track it is in and the index of the clip.
+	MidiClip(usize, usize),
+	/// The empty space of a track.
+	EmptyTrack { track: usize, time: BeatTime },
+	/// The empty space below the tracks.
+	EmptyArea { time: BeatTime },
+}
+
+/// What the user can do to a clip.
+#[derive(Clone, Copy, Debug)]
+pub enum ClipAction {
+	/// Make a copy of the clip.
+	Duplicate,
+	/// Remove the clip.
+	Delete,
+	/// Play the clip backwards.
+	Reverse,
+	/// Make the clip as loud as it can be.
+	Normalize,
+	/// Turn the clip upside down.
+	InvertPolarity,
+	/// Cut the clip in two at the playhead.
+	Split,
+	/// Open the clip in the piano roll.
+	OpenInPianoRoll,
+	/// Move the notes of the clip onto the grid.
+	Quantize,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -79,6 +115,8 @@ pub struct State {
 	pub secondary: HashSet<(usize, usize)>,
 	pub position: Vector,
 	pub scale: Vector,
+	/// What the user right-clicked on, if the menu is open.
+	pub context_menu: Option<ContextTarget>,
 }
 
 impl State {
@@ -116,6 +154,7 @@ pub struct Playlist<'a, Message> {
 
 impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message> {
 	fn diff(&mut self, tree: &mut Tree) {
+		// Diff all tracks - diff is fast, and skipping it breaks scrolling
 		tree.diff_children(&mut self.tracks);
 	}
 
@@ -124,16 +163,21 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 	}
 
 	fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &Limits) -> Node {
+		let state = self.state.borrow();
+		let track_height = state.scale.y;
+		drop(state);
+
 		let mut height = 0.0;
 
 		let children = self
 			.tracks
 			.iter_mut()
 			.zip(&mut tree.children)
-			.map(|(child, tree)| {
-				let node = child
-					.layout(tree, renderer, &limits.height(self.state.borrow().scale.y))
-					.translate(Vector::new(0.0, height));
+			.enumerate()
+			.map(|(_track_idx, (child, tree))| {
+				// Always layout tracks - it's fast and needed for clip tree positioning
+				let node = child.layout(tree, renderer, &limits.height(track_height));
+				let node = node.translate(Vector::new(0.0, height));
 				height += node.bounds().height;
 				node
 			})
@@ -152,12 +196,26 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 		shell: &mut Shell<'_, Message>,
 		viewport: &Rectangle,
 	) {
+		let state = self.state.borrow();
+		let track_height = state.scale.y;
+		let viewport_y = state.position.y;
+		let viewport_height = viewport.height;
+		
+		// Estimate visible track range
+		let first_visible_track = ((viewport_y / track_height) as usize).saturating_sub(1);
+		let visible_track_count = ((viewport_height / track_height).ceil() as usize) + 2;
+		let last_visible_track = (first_visible_track + visible_track_count).min(self.tracks.len());
+		drop(state);
+
 		self.tracks
 			.iter_mut()
 			.zip(&mut tree.children)
 			.zip(layout.children())
-			.for_each(|((child, tree), layout)| {
-				child.update(tree, event, layout, cursor, renderer, shell, viewport);
+			.enumerate()
+			.for_each(|(track_idx, ((child, tree), layout))| {
+				if track_idx >= first_visible_track && track_idx < last_visible_track {
+					child.update(tree, event, layout, cursor, renderer, shell, viewport);
+				}
 			});
 
 		let state = &mut *self.state.borrow_mut();
@@ -174,6 +232,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 				Status::DraggingSplit(..) => state.primary.extend(state.secondary.drain()),
 				_ => {}
 			}
+			shell.publish((self.action)(Action::Finished));
 			shell.capture_event();
 			shell.request_redraw();
 			return;
@@ -248,23 +307,73 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 			Event::Mouse(mouse::Event::ButtonPressed {
 				button: mouse::Button::Right,
 				modifiers,
-			}) if state.status == Status::None => {
-				let Some(track) =
-					track_index(&layout, cursor).or_else(|| layout.children().len().checked_sub(1))
-				else {
+			}) => {
+				// the menu of the last thing the user right-clicked on is gone
+				state.context_menu = None;
+
+				if state.status != Status::None {
 					return;
-				};
-				state.primary.clear();
-
-				if modifiers.command() {
-					let time = self
-						.grid
-						.maybe_snap(new_time, *modifiers, |time| time.round(snap_step));
-
-					state.status = Status::Selecting(track, track, time, time, true);
 				}
 
-				shell.capture_event();
+				let track =
+					track_index(&layout, cursor).or_else(|| layout.children().len().checked_sub(1));
+
+				// the clip the user right-clicked on, if there is one
+				let clip_target = track.and_then(|track| {
+					self.tracks[track]
+						.clips
+						.iter()
+						.enumerate()
+						.find(|(clip, _)| {
+							layout.child(track).child(*clip).bounds().contains(cursor)
+						})
+						.map(|(clip, inner)| (track, clip, inner))
+				});
+
+				if modifiers.command() {
+					// select the clip, so that it can be deleted
+					state.primary.clear();
+
+					if let Some(track) = track {
+						let time = self
+							.grid
+							.maybe_snap(new_time, *modifiers, |time| time.round(snap_step));
+
+						if let Some((_, _, clip)) = clip_target {
+							let clip_index = match clip.inner {
+								clip::Inner::AudioClip(inner) => Some(inner.index),
+								clip::Inner::MidiClip(inner) => Some(inner.index),
+								_ => None,
+							};
+							if let Some(index) = clip_index {
+								state.primary.insert(index);
+							}
+						}
+
+						state.status = Status::Selecting(track, track, time, time, true);
+					}
+
+					shell.capture_event();
+				} else {
+					// the menu of the clip, or of the background
+					state.context_menu = Some(match (clip_target, track) {
+						(Some((track, clip, _)), _) => {
+							let inner = &self.tracks[track].clips[clip].inner;
+
+							match inner {
+								clip::Inner::AudioClip(_) => ContextTarget::AudioClip(track, clip),
+								clip::Inner::MidiClip(_) => ContextTarget::MidiClip(track, clip),
+								clip::Inner::AudioRecording(..)
+								| clip::Inner::MidiRecording(..) => {
+									ContextTarget::EmptyTrack { track, time: new_time }
+								}
+							}
+						}
+						(None, Some(track)) => ContextTarget::EmptyTrack { track, time: new_time },
+						(None, None) => ContextTarget::EmptyArea { time: new_time },
+					});
+				}
+
 				shell.request_redraw();
 			}
 			Event::Mouse(mouse::Event::CursorMoved { modifiers, .. })

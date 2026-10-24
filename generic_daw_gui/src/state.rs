@@ -1,4 +1,5 @@
 use crate::daw::STATE_DIR;
+use crate::shortcuts::Manager;
 use generic_daw_core::{
 	Transport,
 	time::{BeatTime, SecondsTime},
@@ -33,6 +34,9 @@ pub struct State {
 	pub metronome: bool,
 	pub autoscroll: bool,
 	pub grid: Grid,
+	/// The keyboard shortcuts that are in effect.
+	#[serde(skip)]
+	pub shortcuts: Manager,
 }
 
 impl Default for State {
@@ -48,6 +52,7 @@ impl Default for State {
 			metronome: false,
 			autoscroll: false,
 			grid: Grid::default(),
+			shortcuts: Manager::default(),
 		}
 	}
 }

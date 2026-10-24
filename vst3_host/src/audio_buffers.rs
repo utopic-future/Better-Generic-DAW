@@ -149,16 +149,20 @@ impl AudioBuffers {
 		let sample_mix = mix_level.abs();
 
 		if channels == 1 {
-			for (sample, frame) in self.output.iter().zip(buf) {
-				frame[0] = frame[0] * buf_mix + sample * sample_mix;
-				frame[1] = frame[1] * buf_mix + sample * sample_mix;
+			for frame in &mut *buf {
+				frame[0] = frame[0] * buf_mix;
+				frame[1] = frame[1] * buf_mix;
+			}
+			for (sample, frame) in self.output.iter().zip(&mut *buf) {
+				frame[0] += sample * sample_mix;
+				frame[1] += sample * sample_mix;
 			}
 		} else {
 			let (left, right) = self.output.split_at(self.max_frames);
 
-			for ((left, right), frame) in left.iter().zip(right).zip(buf) {
-				frame[0] = frame[0] * buf_mix + left * sample_mix;
-				frame[1] = frame[1] * buf_mix + right * sample_mix;
+			for i in 0..buf.len() {
+				buf[i][0] = buf[i][0] * buf_mix + left[i] * sample_mix;
+				buf[i][1] = buf[i][1] * buf_mix + right[i] * sample_mix;
 			}
 		}
 	}
@@ -168,8 +172,10 @@ impl AudioBuffers {
 		self.delay_line.advance_mut(buf);
 
 		if self.layout.output_channels() != 0 {
-			for sample in buf.as_flattened_mut() {
-				*sample *= 1.0 - mix_level;
+			let gain = 1.0 - mix_level;
+			for frame in buf {
+				frame[0] *= gain;
+				frame[1] *= gain;
 			}
 		}
 	}

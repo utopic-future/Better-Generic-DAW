@@ -565,6 +565,11 @@ impl ClapHost {
 		}
 	}
 
+	/// Whether the host has the plugin with this identifier.
+	pub fn has(&self, id: PluginId) -> bool {
+		self.plugins.contains_key(&id)
+	}
+
 	pub fn get_state(&mut self, id: PluginId, context_type: StateContextType) -> Option<&[u8]> {
 		self.plugins.get_mut(&id)?.get_state(context_type)
 	}

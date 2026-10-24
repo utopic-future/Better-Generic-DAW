@@ -7,6 +7,9 @@ use audio_graph::Injector;
 use dsp::Utility;
 use utils::ShiftMoveExt as _;
 
+#[cfg(feature = "simd")]
+use audio_graph::simd;
+
 #[derive(Debug)]
 pub struct Channel {
 	id: NodeId,
@@ -44,22 +47,29 @@ impl Channel {
 	) -> usize {
 		let mut latency = 0;
 
+		// Bypass: save dry signal before any processing
 		if self.bypassed {
 			scratch.audio[..audio.len()].copy_from_slice(audio);
 			scratch.events.clone_from(events);
 		}
 
+		// Process through plugins
 		for plugin in &mut self.plugins {
 			latency += plugin.process(state, audio, events, injector);
 		}
 
+		// Apply utility (volume, pan)
+		self.utility.process(audio);
+
+		// If bypassed, restore dry signal WITH utility applied
 		if self.bypassed {
 			latency = 0;
+			// Apply utility to the saved dry signal
+			self.utility.process(&mut scratch.audio[..audio.len()]);
 			audio.copy_from_slice(&scratch.audio[..audio.len()]);
 			events.clone_from(&scratch.events);
 		}
 
-		self.utility.process(audio);
 		let peaks = max_peaks(audio).map(|x| if x >= f32::EPSILON { x } else { 0.0 });
 		self.peaks = [self.peaks[0].max(peaks[0]), self.peaks[1].max(peaks[1])];
 
@@ -101,6 +111,8 @@ impl Channel {
 			NodeAction::PluginParamChanged(index, param_id, value) => {
 				self.plugins[index].param_changed(param_id, value);
 			}
+			// Only tracks have an instrument chain that notes can be previewed through.
+			NodeAction::MidiPreview(_) => {}
 			_ => panic!("{action:?}"),
 		}
 	}
@@ -126,23 +138,22 @@ impl Channel {
 }
 
 fn max_peaks(audio: &[[f32; 2]]) -> [f32; 2] {
-	fn max_peaks<const N: usize>(mut old: [f32; N], new: [f32; N]) -> [f32; N] {
-		for (old, new) in old.iter_mut().zip(new) {
-			*old = if new > *old { new } else { *old };
-		}
-		old
+	#[cfg(feature = "simd")]
+	{
+		return simd::peak_stereo_sse2(audio);
 	}
 
-	let (chunks_16, rest) = audio.as_flattened().as_chunks::<16>();
-	let (chunks_2, _) = rest.as_chunks::<2>();
-
-	chunks_16
-		.iter()
-		.map(|chunk| chunk.map(f32::abs))
-		.reduce(max_peaks)
-		.into_iter()
-		.flat_map(|chunk| *chunk.as_chunks().0.as_array::<8>().unwrap())
-		.chain(chunks_2.iter().map(|chunk| chunk.map(f32::abs)))
-		.reduce(max_peaks)
-		.unwrap_or_default()
+	#[cfg(not(feature = "simd"))]
+	{
+		// Process stereo frames directly - simpler and avoids chunking issues
+		let mut max_l = 0.0f32;
+		let mut max_r = 0.0f32;
+		for &[l, r] in audio {
+			let l_abs = l.abs();
+			let r_abs = r.abs();
+			if l_abs > max_l { max_l = l_abs; }
+			if r_abs > max_r { max_r = r_abs; }
+		}
+		[max_l, max_r]
+	}
 }

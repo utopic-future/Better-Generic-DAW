@@ -606,6 +606,11 @@ impl Vst3Host {
 		self.offline = matches!(render_mode, RenderMode::Offline);
 	}
 
+	/// Whether the host has the plugin with this identifier.
+	pub fn has(&self, id: PluginId) -> bool {
+		self.plugins.contains_key(&id)
+	}
+
 	pub fn get_state(&self, id: PluginId) -> Option<Vec<u8>> {
 		self.plugins
 			.get(&id)?

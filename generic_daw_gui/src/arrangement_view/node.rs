@@ -1,10 +1,12 @@
 use crate::{
 	arrangement_view::{Message, Tab, format_pan, plugin::Plugin},
-	components::menu_entry,
+	components::{MenuItem, menu, menu_entry, menu_width},
 	icons::{
 		arrow_up_down, between_horizontal_start, between_vertical_start,
-		chevrons_left_right_ellipsis, circle_ellipsis, copy, power, power_off, replace, rotate_ccw,
+		chevrons_left_right_ellipsis, circle_ellipsis, copy, pencil, power, power_off, replace,
+		rotate_ccw, route, snowflake, star, trash_2, volume_2, volume_off,
 	},
+	shortcuts::{Action as ShortcutAction, Manager},
 	stylefns::{container_with_radius, scrollable_with_container, weaker_bordered_box},
 };
 use generic_daw_core::{Channels, NodeId, PanMode, Transport, Utility};
@@ -28,6 +30,8 @@ pub struct Node {
 	pub id: NodeId,
 	pub name: Arc<str>,
 	pub widget_id: widget::Id,
+	/// The identifier of the field the name of the node is written in.
+	pub name_id: widget::Id,
 	pub plugins: Vec<Plugin>,
 	pub utility: Utility,
 	pub enabled: bool,
@@ -45,6 +49,7 @@ impl Node {
 			id,
 			name: Arc::default(),
 			widget_id: widget::Id::unique(),
+			name_id: widget::Id::unique(),
 			plugins: Vec::new(),
 			utility: Utility::default(),
 			enabled: true,
@@ -61,85 +66,179 @@ impl Node {
 		self.peaks[1].update(peaks[1], now);
 	}
 
-	pub fn main_context_menu(&self, tab: Tab) -> Element<'_, Message> {
-		container(column![
-			menu_entry(
-				if tab == Tab::Mixer {
+	/// The menu of a track header or of a channel in the mixer.
+	pub fn main_context_menu<'a>(
+		&'a self,
+		tab: Tab,
+		shortcuts: &'a Manager,
+		routes: Vec<MenuItem<Message>>,
+	) -> Element<'a, Message> {
+		let mut items: Vec<MenuItem<Message>> = Vec::new();
+
+		if self.ty != NodeType::Master {
+			items.push(MenuItem::Action {
+				icon: Some(if tab == Tab::Mixer {
 					between_vertical_start()
 				} else {
 					between_horizontal_start()
+				}),
+				label: "Insert after".into(),
+				shortcut: String::new(),
+				message: match self.ty {
+					NodeType::Channel => Message::ChannelInsert(self.id),
+					NodeType::Track => Message::TrackInsert(self.id),
+					NodeType::Master => unreachable!(),
 				},
-				"Insert after",
-				""
-			)
-			.on_press_maybe(match self.ty {
-				NodeType::Master => None,
-				NodeType::Channel => Some(Message::ChannelInsert(self.id)),
-				NodeType::Track => Some(Message::TrackInsert(self.id)),
-			}),
-			menu_entry(
-				copy(),
-				"Duplicate",
-				if tab == Tab::Mixer { "Ctrl-D" } else { "" }
-			)
-			.on_press_maybe(match self.ty {
-				NodeType::Master => None,
-				NodeType::Channel => Some(Message::ChannelDuplicate(self.id)),
-				NodeType::Track => Some(Message::TrackDuplicate(self.id)),
-			}),
-			(tab == Tab::Mixer).then(|| menu_entry(
-				replace(),
-				if self.ty == NodeType::Channel {
-					"Convert to track"
+			});
+
+			items.push(MenuItem::Action {
+				icon: Some(copy()),
+				label: "Duplicate".into(),
+				shortcut: shortcuts.label(ShortcutAction::Duplicate),
+				message: match self.ty {
+					NodeType::Channel => Message::ChannelDuplicate(self.id),
+					NodeType::Track => Message::TrackDuplicate(self.id),
+					NodeType::Master => unreachable!(),
+				},
+			});
+		}
+
+		if tab == Tab::Mixer && self.ty != NodeType::Master {
+			items.push(MenuItem::Action {
+				icon: Some(replace()),
+				label: if self.ty == NodeType::Channel {
+					"Convert to track".into()
 				} else {
-					"Convert to channel"
+					"Convert to channel".into()
 				},
-				""
-			)
-			.on_press_maybe((self.ty != NodeType::Master).then_some(Message::ToggleKind(self.id)))),
-			container(rule::horizontal(1)).padding(padding::horizontal(5)),
-			if self.bypassed {
-				menu_entry(power_off(), "Engage FX", "")
+				shortcut: String::new(),
+				message: Message::ToggleKind(self.id),
+			});
+		}
+
+		items.push(MenuItem::Separator);
+
+		items.push(MenuItem::Action {
+			icon: Some(pencil()),
+			label: "Rename".into(),
+			shortcut: String::new(),
+			message: Message::ChannelRename(self.id),
+		});
+
+		if self.ty != NodeType::Master {
+			items.push(MenuItem::Action {
+				icon: Some(trash_2()),
+				label: "Remove".into(),
+				shortcut: String::new(),
+				message: match self.ty {
+					NodeType::Channel => Message::ChannelRemove(self.id),
+					NodeType::Track => Message::TrackRemove(self.id),
+					NodeType::Master => unreachable!(),
+				},
+			});
+		}
+
+		if self.ty == NodeType::Track {
+			items.push(MenuItem::Action {
+				icon: Some(snowflake()),
+				label: "Freeze".into(),
+				shortcut: String::new(),
+				message: Message::Freeze(self.id),
+			});
+		}
+
+		items.push(MenuItem::Separator);
+
+		items.push(MenuItem::Action {
+			icon: Some(if self.bypassed { power_off() } else { power() }),
+			label: if self.bypassed {
+				"Engage FX".into()
 			} else {
-				menu_entry(power(), "Bypass FX", "")
-			}
-			.on_press(Message::ChannelToggleBypassed(self.id)),
-			container(rule::horizontal(1)).padding(padding::horizontal(5)),
-			menu_entry(
-				arrow_up_down(),
-				"Invert polarity",
-				if tab == Tab::Mixer { "Alt-I" } else { "" }
-			)
-			.on_press(Message::ChannelVolumeChanged(self.id, -self.utility.volume)),
-			match self.utility.pan {
-				PanMode::Stereo(..) =>
-					menu_entry(chevrons_left_right_ellipsis(), "Split stereo pan", "").on_press(
-						Message::ChannelPanChanged(self.id, PanMode::SplitStereo(-1.0, 1.0))
-					),
-				PanMode::SplitStereo(..) => menu_entry(circle_ellipsis(), "Stereo pan", "")
-					.on_press(Message::ChannelPanChanged(self.id, PanMode::Stereo(0.0))),
-			}
-		])
-		.width(180)
-		.style(container_with_radius(weaker_bordered_box, 5))
-		.into()
+				"Bypass FX".into()
+			},
+			shortcut: String::new(),
+			message: Message::ChannelToggleBypassed(self.id),
+		});
+
+		items.push(MenuItem::Action {
+			icon: Some(if self.enabled { volume_2() } else { volume_off() }),
+			label: if self.enabled { "Mute".into() } else { "Unmute".into() },
+			shortcut: shortcuts.label(ShortcutAction::ToggleEnabled),
+			message: match self.ty {
+				NodeType::Track => Message::TrackToggleEnabled(self.id),
+				_ => Message::ChannelToggleEnabled(self.id),
+			},
+		});
+
+		if self.ty == NodeType::Track {
+			items.push(MenuItem::Action {
+				icon: Some(star()),
+				label: "Solo".into(),
+				shortcut: shortcuts.label(ShortcutAction::ToggleSolo),
+				message: Message::TrackToggleSolo(self.id),
+			});
+		}
+
+		items.push(MenuItem::Separator);
+
+		items.push(MenuItem::Action {
+			icon: Some(arrow_up_down()),
+			label: "Invert polarity".into(),
+			shortcut: shortcuts.label(ShortcutAction::Invert),
+			message: Message::ChannelVolumeChanged(self.id, -self.utility.volume),
+		});
+
+		if tab == Tab::Mixer && !routes.is_empty() {
+			items.push(MenuItem::Separator);
+
+			items.push(MenuItem::Submenu {
+				icon: Some(route()),
+				label: "Route to".into(),
+				items: routes,
+			});
+		}
+
+		match self.utility.pan {
+			PanMode::Stereo(..) => items.push(MenuItem::Action {
+				icon: Some(chevrons_left_right_ellipsis()),
+				label: "Split stereo pan".into(),
+				shortcut: String::new(),
+				message: Message::ChannelPanChanged(self.id, PanMode::SplitStereo(-1.0, 1.0)),
+			}),
+			PanMode::SplitStereo(..) => items.push(MenuItem::Action {
+				icon: Some(circle_ellipsis()),
+				label: "Stereo pan".into(),
+				shortcut: String::new(),
+				message: Message::ChannelPanChanged(self.id, PanMode::Stereo(0.0)),
+			}),
+		}
+
+		menu(items)
 	}
 
 	pub fn volume_context_menu(&self, tab: Tab) -> Element<'_, Message> {
-		container(column![
-			menu_entry(rotate_ccw(), "Reset", "Ctrl-Click")
-				.on_press(Message::ChannelVolumeChanged(self.id, 1.0)),
-			container(rule::horizontal(1)).padding(padding::horizontal(5)),
-			menu_entry(
-				arrow_up_down(),
-				"Invert polarity",
-				if tab == Tab::Mixer { "Alt-I" } else { "" }
-			)
-			.on_press(Message::ChannelVolumeChanged(self.id, -self.utility.volume)),
-		])
-		.width(if tab == Tab::Mixer { 180 } else { 160 })
-		.style(container_with_radius(weaker_bordered_box, 5))
-		.into()
+		menu_width(
+			vec![
+				MenuItem::Action {
+					icon: Some(rotate_ccw()),
+					label: "Reset".into(),
+					shortcut: "Ctrl-Click".into(),
+					message: Message::ChannelVolumeChanged(self.id, 1.0),
+				},
+				MenuItem::Separator,
+				MenuItem::Action {
+					icon: Some(arrow_up_down()),
+					label: "Invert polarity".into(),
+					shortcut: if tab == Tab::Mixer {
+						"Alt-I".into()
+					} else {
+						String::new()
+					},
+					message: Message::ChannelVolumeChanged(self.id, -self.utility.volume),
+				},
+			],
+			if tab == Tab::Mixer { 180.0 } else { 160.0 },
+		)
 	}
 
 	pub fn pan_knob(&self, radius: f32, enabled: bool) -> Element<'_, Message> {

@@ -1,12 +1,16 @@
 use generic_daw_core::{
 	clap_host::{self, Category, Feature, Subcategory},
+	vst2_host,
 	vst3_host,
 };
+use std::path::Path;
+use std::sync::Arc;
 
 /// A plugin that can be loaded, of any format.
 #[derive(Clone, Debug)]
 pub enum PluginDescriptor {
 	Clap(clap_host::PluginDescriptor),
+	Vst2(vst2_host::PluginDescriptor),
 	Vst3(vst3_host::PluginDescriptor),
 }
 
@@ -15,6 +19,7 @@ impl PluginDescriptor {
 	pub fn name(&self) -> &str {
 		match self {
 			Self::Clap(descriptor) => &descriptor.name,
+			Self::Vst2(descriptor) => &descriptor.name,
 			Self::Vst3(descriptor) => &descriptor.name,
 		}
 	}
@@ -23,6 +28,7 @@ impl PluginDescriptor {
 	pub fn vendor(&self) -> Option<&str> {
 		match self {
 			Self::Clap(descriptor) => descriptor.vendor.as_deref(),
+			Self::Vst2(descriptor) => descriptor.vendor.as_deref(),
 			Self::Vst3(descriptor) => descriptor.vendor.as_deref(),
 		}
 	}
@@ -31,6 +37,7 @@ impl PluginDescriptor {
 	pub fn version(&self) -> Option<&str> {
 		match self {
 			Self::Clap(descriptor) => descriptor.version.as_deref(),
+			Self::Vst2(descriptor) => descriptor.version.as_deref(),
 			Self::Vst3(descriptor) => descriptor.version.as_deref(),
 		}
 	}
@@ -40,6 +47,7 @@ impl PluginDescriptor {
 	pub const fn format(&self) -> &'static str {
 		match self {
 			Self::Clap(_) => "CLAP",
+			Self::Vst2(_) => "VST2",
 			Self::Vst3(_) => "VST3",
 		}
 	}
@@ -50,7 +58,18 @@ impl PluginDescriptor {
 	pub const fn format_rank(&self) -> u8 {
 		match self {
 			Self::Clap(_) => 0,
-			Self::Vst3(_) => 1,
+			Self::Vst2(_) => 1,
+			Self::Vst3(_) => 2,
+		}
+	}
+
+	/// The path to the plugin file.
+	#[must_use]
+	pub fn path(&self) -> &Arc<Path> {
+		match self {
+			Self::Clap(descriptor) => &descriptor.path,
+			Self::Vst2(descriptor) => &descriptor.path,
+			Self::Vst3(descriptor) => &descriptor.path,
 		}
 	}
 
@@ -58,6 +77,13 @@ impl PluginDescriptor {
 	pub fn in_category(&self, category: Category) -> bool {
 		match self {
 			Self::Clap(descriptor) => descriptor.features.contains(&Feature::Category(category)),
+			Self::Vst2(descriptor) => match category {
+				Category::Instrument => descriptor.is_instrument(),
+				Category::Analyzer => descriptor.is_analyzer(),
+				// plugins that don't say are taken to be effects
+				Category::AudioEffect => !descriptor.is_instrument() && !descriptor.is_analyzer(),
+				Category::NoteEffect | Category::NoteDetector => false,
+			},
 			Self::Vst3(descriptor) => {
 				let has = |word: &str| descriptor.subcategories.iter().any(|s| &**s == word);
 
@@ -78,6 +104,8 @@ impl PluginDescriptor {
 			Self::Clap(descriptor) => descriptor
 				.features
 				.contains(&Feature::Subcategory(subcategory)),
+			// VST2 plugins don't say what kind of effect they are
+			Self::Vst2(_) => false,
 			Self::Vst3(descriptor) => {
 				let words = vst3_words(subcategory);
 				descriptor

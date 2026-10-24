@@ -2,6 +2,7 @@
 members = [
 	"audio_graph",
 	"clap_host", "dsp",
+	"vst2_host",
 	"vst3_host",
 	"generic_daw_core",
 	"generic_daw_gui",
@@ -12,10 +13,18 @@ members = [
 ]
 resolver = "3"
 
+[workspace.features]
+simd = [
+	"audio_graph/simd",
+	"dsp/simd",
+	"generic_daw_core/simd",
+]
+
 [workspace.dependencies]
 audio_graph.path = "audio_graph"
 clap_host.path = "clap_host"
 dsp.path = "dsp"
+vst2_host.path = "vst2_host"
 vst3_host.path = "vst3_host"
 generic_daw_core.path = "generic_daw_core"
 generic_daw_project.path = "generic_daw_project"
@@ -89,6 +98,7 @@ panic = "abort"
 lto = true
 panic = "abort"
 codegen-units = 1
+opt-level = "z"
 
 [patch.crates-io]
 # https://github.com/pop-os/cosmic-text/pull/528

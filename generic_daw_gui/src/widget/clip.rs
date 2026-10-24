@@ -1,5 +1,6 @@
 use crate::{
 	arrangement_view::{AudioClipRef, AudioRecording, MidiClipRef, MidiRecording, format_db},
+	mesh_budget::MeshBudget,
 	state::Grid,
 	widget::{
 		ALPHA_1_3, ALPHA_2_3, LINE_HEIGHT, frames_per_px,
@@ -32,7 +33,7 @@ use iced::{
 };
 use std::{
 	borrow::{Borrow, BorrowMut},
-	cell::RefCell,
+	cell::{Cell, RefCell},
 	sync::Arc,
 };
 
@@ -58,6 +59,12 @@ struct State {
 	show_controls: bool,
 	selected: bool,
 	enabled: bool,
+	// Deferred dirty flags - avoid clearing caches for invisible clips
+	// Using Cell for interior mutability in draw()
+	mesh_dirty: Cell<bool>,
+	canvas_dirty: Cell<bool>,
+	// Track zoom-dependent mesh properties separately from viewport
+	last_frames_per_px: Cell<f32>,
 }
 
 impl Default for State {
@@ -74,6 +81,9 @@ impl Default for State {
 			show_controls: false,
 			selected: false,
 			enabled: true,
+			mesh_dirty: Cell::new(false),
+			canvas_dirty: Cell::new(false),
+			last_frames_per_px: Cell::new(0.0),
 		}
 	}
 }
@@ -181,15 +191,15 @@ impl<Message> Widget<Message, Theme, Renderer> for Clip<'_, Message> {
 			}
 
 			state.last_info = info;
-			state.canvas_cache.get_mut().clear();
-			if !state.mesh_cache.get_mut().is_empty() {
-				state.mesh_cache.get_mut().update(Arc::default());
-			}
+			// Defer cache clearing - only mark as dirty, don't clear immediately
+			// This avoids regenerating meshes for clips that won't be drawn
+			state.mesh_dirty.set(true);
+			state.canvas_dirty.set(true);
 		}
 
 		if state.enabled != self.enabled {
 			state.enabled = self.enabled;
-			state.canvas_cache.get_mut().clear();
+			state.canvas_dirty.set(true);
 		}
 	}
 
@@ -252,11 +262,20 @@ impl<Message> Widget<Message, Theme, Renderer> for Clip<'_, Message> {
 
 			if state.last_bounds != bounds {
 				state.last_bounds = bounds;
-				state.canvas_cache.get_mut().clear();
-				if !state.mesh_cache.get_mut().is_empty() {
-					state.mesh_cache.get_mut().update(Arc::default());
-				}
+				state.canvas_dirty.set(true);
 			}
+		}
+
+		// Only invalidate mesh when zoom level changes, not on pan.
+		// The borrow must be dropped before `borrow_mut` below, otherwise
+		// `RefCell` panics with "already borrowed".
+		let zoom = {
+			let playlist = self.playlist.borrow();
+			frames_per_px(playlist.scale, self.transport)
+		};
+		if (state.last_frames_per_px.get() - zoom).abs() > 0.01 {
+			state.last_frames_per_px.set(zoom);
+			state.mesh_dirty.set(true);
 		}
 
 		let (Inner::AudioClip(AudioClipRef { index, .. })
@@ -271,7 +290,7 @@ impl<Message> Widget<Message, Theme, Renderer> for Clip<'_, Message> {
 			let selected = playlist.primary.contains(&index) || playlist.secondary.contains(&index);
 			if state.selected != selected {
 				state.selected = selected;
-				state.canvas_cache.get_mut().clear();
+				state.canvas_dirty.set(true);
 			}
 		}
 
@@ -599,6 +618,18 @@ impl<Message> Widget<Message, Theme, Renderer> for Clip<'_, Message> {
 		let canvas_cache = &mut *state.canvas_cache.borrow_mut();
 		let last_theme = &mut *state.last_theme.borrow_mut();
 
+		// Handle deferred dirty flags - only clear caches when clip is actually drawn
+		if state.mesh_dirty.get() {
+			state.mesh_dirty.set(false);
+			if !mesh_cache.is_empty() {
+				mesh_cache.update(Arc::default());
+			}
+		}
+		if state.canvas_dirty.get() {
+			state.canvas_dirty.set(false);
+			canvas_cache.clear();
+		}
+
 		if last_theme.as_ref() != Some(theme) {
 			*last_theme = Some(theme.clone());
 			canvas_cache.clear();
@@ -613,7 +644,7 @@ impl<Message> Widget<Message, Theme, Renderer> for Clip<'_, Message> {
 
 		match self.inner {
 			Inner::AudioClip(inner) => {
-				if mesh_cache.is_empty()
+				if mesh_cache.is_empty() && MeshBudget::try_consume()
 					&& let Some(mesh) = debug::time_with("Waveform", || {
 						let resample_ratio = inner.sample.resample_ratio(self.transport);
 						inner.sample.lods.mesh(

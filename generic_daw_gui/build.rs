@@ -30,6 +30,7 @@ static GLYPHS: &[(&str, char)] = &[
 	icon!(sliders_vertical = 57698),
 	icon!(snowflake = 57701),
 	icon!(square = 57703),
+	icon!(star = 57718),
 	icon!(triangle_alert = 57747),
 	icon!(volume_2 = 57771),
 	icon!(x = 57778),
@@ -56,6 +57,20 @@ static GLYPHS: &[(&str, char)] = &[
 	icon!(metronome = 59068),
 	icon!(square_arrow_right_enter = 59075),
 	icon!(midi_port = 59193),
+	icon!(check = 57452),
+	icon!(trash_2 = 57742),
+	icon!(pencil = 57849),
+	icon!(clipboard_paste = 58344),
+	icon!(arrow_left_right = 57930),
+	icon!(flip_horizontal = 58205),
+	icon!(route = 58686),
+	icon!(square_split_horizontal = 58294),
+	icon!(gauge = 57791),
+	icon!(settings = 57684),
+	icon!(history = 57845),
+	icon!(volume_off = 58918),
+	icon!(repeat = 57670),
+	icon!(music_2 = 58186),
 ];
 
 pub fn main() {

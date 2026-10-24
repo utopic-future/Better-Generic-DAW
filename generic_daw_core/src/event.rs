@@ -1,3 +1,4 @@
+use crate::vst2_host;
 use clap_host::{
 	ClapId, Cookie,
 	events::{
@@ -82,11 +83,86 @@ impl Event {
 		}
 	}
 
+	/// The VST2 form of the event.
+	///
+	/// VST2 has no channels, so the notes are on the first one, and its parameters
+	/// change at the start of the block instead of at a time.
+	#[must_use]
+	pub fn to_vst2(self) -> vst2_host::Event {
+		match self {
+			Self::On {
+				time,
+				key,
+				velocity,
+				..
+			} => vst2_host::Event::NoteOn {
+				time,
+				key,
+				velocity,
+			},
+			Self::Off {
+				time,
+				key,
+				velocity,
+				..
+			} => vst2_host::Event::NoteOff {
+				time,
+				key,
+				velocity,
+			},
+			Self::ParamValue {
+				time,
+				param_id,
+				value,
+				..
+			} => vst2_host::Event::ParamValue {
+				time,
+				id: param_id.get(),
+				value,
+			},
+		}
+	}
+
+	/// The inverse of [`to_vst2`](Self::to_vst2), `None` for the one parameter id that
+	/// CLAP reserves.
+	#[must_use]
+	pub fn from_vst2(event: vst2_host::Event) -> Option<Self> {
+		match event {
+			vst2_host::Event::NoteOn {
+				time,
+				key,
+				velocity,
+			} => Some(Self::On {
+				time,
+				key,
+				velocity,
+				note_id: Match::All,
+				flags: EventFlags::empty(),
+			}),
+			vst2_host::Event::NoteOff {
+				time,
+				key,
+				velocity,
+			} => Some(Self::Off {
+				time,
+				key,
+				velocity,
+				note_id: Match::All,
+				flags: EventFlags::empty(),
+			}),
+			vst2_host::Event::ParamValue { time, id, value } => Some(Self::ParamValue {
+				time,
+				param_id: ClapId::from_raw(id)?,
+				value,
+				flags: EventFlags::empty(),
+			}),
+		}
+	}
+
 	/// The inverse of [`to_vst3`](Self::to_vst3), `None` for events that can't be represented
 	/// (notes outside of the MIDI range, and the one parameter id that CLAP reserves).
 	#[must_use]
-	pub fn from_vst3(event: vst3_host::Event) -> Option<Self> {
-		let note_id = |note_id: Option<i32>| {
+	pub fn from_vst3(event: vst3_host::Event) -> Option<Self> {		let note_id = |note_id: Option<i32>| {
 			note_id
 				.and_then(|id| u32::try_from(id).ok())
 				.map_or(Match::All, Match::Specific)

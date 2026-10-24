@@ -81,12 +81,12 @@ impl<'a> Shared<'a> {
 
 	pub fn initialized(&self, instance: InitializedPluginHandle<'a>) {
 		macro_rules! initialized {
-			($($ident:ident),*) => {$(
+			($($ident:ident),*) => { $(
 				if let Some($ident) = instance.get_extension() {
 					self.ext.$ident.set(NoDebug($ident)).unwrap();
 					info!(concat!("{}: implements '", stringify!($ident), "'"), &self.descriptor);
 				}
-			)*};
+			)* };
 		}
 
 		initialized![
@@ -117,9 +117,9 @@ impl SharedHandler<'_> for Shared<'_> {
 
 	fn request_callback(&self) {
 		if !self.request_callback.swap(true, Relaxed) {
-			self.sender
-				.send(MainThreadMessage::RequestCallback)
-				.unwrap();
+			if let Err(e) = self.sender.send(MainThreadMessage::RequestCallback) {
+				warn!("failed to send request_callback: {e}");
+			}
 		}
 	}
 
@@ -132,30 +132,30 @@ impl HostGuiImpl for Shared<'_> {
 	fn resize_hints_changed(&self) {}
 
 	fn request_resize(&self, GuiSize { width, height }: GuiSize) -> Result<(), HostError> {
-		self.sender
-			.send(MainThreadMessage::GuiRequestResize(Size::from_native((
-				width as f32,
-				height as f32,
-			))))
-			.unwrap();
-
+		if self.sender.send(MainThreadMessage::GuiRequestResize(Size::from_native((width as f32, height as f32)))).is_err() {
+			return Err(HostError::Message("failed to send gui request resize"));
+		}
 		Ok(())
 	}
 
 	fn request_show(&self) -> Result<(), HostError> {
-		self.sender.send(MainThreadMessage::GuiRequestShow).unwrap();
-
+		if self.sender.send(MainThreadMessage::GuiRequestShow).is_err() {
+			return Err(HostError::Message("failed to send gui request show"));
+		}
 		Ok(())
 	}
 
 	fn request_hide(&self) -> Result<(), HostError> {
-		self.sender.send(MainThreadMessage::GuiRequestHide).unwrap();
-
+		if self.sender.send(MainThreadMessage::GuiRequestHide).is_err() {
+			return Err(HostError::Message("failed to send gui request hide"));
+		}
 		Ok(())
 	}
 
 	fn closed(&self, _was_destroyed: bool) {
-		self.sender.send(MainThreadMessage::GuiClosed).unwrap();
+		if let Err(e) = self.sender.send(MainThreadMessage::GuiClosed) {
+			warn!("failed to send gui closed: {e}");
+		}
 	}
 }
 
@@ -176,7 +176,9 @@ impl HostLogImpl for Shared<'_> {
 impl HostParamsImplShared for Shared<'_> {
 	fn request_flush(&self) {
 		if !self.request_flush.swap(true, Relaxed) && !self.active.load(Relaxed) {
-			self.sender.send(MainThreadMessage::RequestFlush).unwrap();
+			if let Err(e) = self.sender.send(MainThreadMessage::RequestFlush) {
+				warn!("failed to send request_flush: {e}");
+			}
 		}
 	}
 }

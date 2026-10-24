@@ -27,12 +27,18 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Track<'a, Message> {
 	}
 
 	fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &Limits) -> Node {
+		let _viewport_x = 0.0; // Will be set properly by parent
+		let _viewport_width = limits.max().width;
+		
 		Node::with_children(
 			limits.max(),
 			self.clips
 				.iter_mut()
 				.zip(&mut tree.children)
-				.map(|(child, tree)| child.layout(tree, renderer, limits))
+				.map(|(child, tree)| {
+					// Clip layout is fast - just computes position from time
+					child.layout(tree, renderer, limits)
+				})
 				.collect(),
 		)
 	}
@@ -47,7 +53,11 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Track<'a, Message> {
 		shell: &mut Shell<'_, Message>,
 		viewport: &Rectangle,
 	) {
-		for (i, ((child, tree), layout)) in self
+		// Compute visible clip range based on viewport
+		let viewport_left = viewport.x - layout.position().x;
+		let viewport_right = viewport_left + viewport.width;
+		
+		for (i, ((child, tree), clip_layout)) in self
 			.clips
 			.iter_mut()
 			.zip(&mut tree.children)
@@ -55,11 +65,17 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Track<'a, Message> {
 			.enumerate()
 			.rev()
 		{
-			child.update(tree, event, layout, cursor, renderer, shell, viewport);
+			// Skip clips outside horizontal viewport
+			let clip_bounds = clip_layout.bounds();
+			if clip_bounds.x + clip_bounds.width < viewport_left || clip_bounds.x > viewport_right {
+				continue;
+			}
+			
+			child.update(tree, event, clip_layout, cursor, renderer, shell, viewport);
 
 			if i != 0
 				&& !cursor.is_levitating()
-				&& child.mouse_interaction(tree, layout, cursor, viewport, renderer)
+				&& child.mouse_interaction(tree, clip_layout, cursor, viewport, renderer)
 					!= Interaction::default()
 			{
 				cursor = cursor.levitate();
@@ -88,12 +104,20 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Track<'a, Message> {
 		viewport: &Rectangle,
 		renderer: &Renderer,
 	) -> Interaction {
+		let viewport_left = viewport.x - layout.position().x;
+		let viewport_right = viewport_left + viewport.width;
+		
 		self.clips
 			.iter()
 			.zip(&tree.children)
 			.zip(layout.children())
-			.map(|((child, tree), clip_layout)| {
-				child.mouse_interaction(tree, clip_layout, cursor, viewport, renderer)
+			.filter_map(|((child, tree), clip_layout)| {
+				// Skip clips outside horizontal viewport
+				let clip_bounds = clip_layout.bounds();
+				if clip_bounds.x + clip_bounds.width < viewport_left || clip_bounds.x > viewport_right {
+					return None;
+				}
+				Some(child.mouse_interaction(tree, clip_layout, cursor, viewport, renderer))
 			})
 			.rfind(|&i| i != Interaction::default())
 			.unwrap_or_default()
@@ -107,13 +131,21 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Track<'a, Message> {
 		viewport: &Rectangle,
 		translation: Vector,
 	) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
+		let viewport_left = viewport.x - layout.position().x;
+		let viewport_right = viewport_left + viewport.width;
+		
 		let children = self
 			.clips
 			.iter_mut()
 			.zip(&mut tree.children)
 			.zip(layout.children())
-			.filter_map(|((child, tree), layout)| {
-				child.overlay(tree, layout, renderer, viewport, translation)
+			.filter_map(|((child, tree), clip_layout)| {
+				// Skip clips outside horizontal viewport
+				let clip_bounds = clip_layout.bounds();
+				if clip_bounds.x + clip_bounds.width < viewport_left || clip_bounds.x > viewport_right {
+					return None;
+				}
+				child.overlay(tree, clip_layout, renderer, viewport, translation)
 			})
 			.collect::<Vec<_>>();
 
@@ -133,8 +165,12 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Track<'a, Message> {
 				.iter_mut()
 				.zip(&mut tree.children)
 				.zip(layout.children())
-				.for_each(|((child, tree), layout)| {
-					child.operate(tree, layout, renderer, operation);
+				.for_each(|((child, tree), clip_layout)| {
+					// Skip clips with zero width (invalid layout)
+					if clip_layout.bounds().width <= 0.0 {
+						return;
+					}
+					child.operate(tree, clip_layout, renderer, operation);
 				});
 		});
 	}

@@ -17,16 +17,29 @@ mod daw;
 mod file_tree;
 mod icons;
 mod lod;
+mod mesh_budget;
 mod operation;
 mod plugin_descriptor;
+mod plugin_memory;
 mod plugin_picker;
+mod shortcuts;
 mod state;
 mod stylefns;
 mod theme;
+mod vst2_host;
 mod vst3_host;
 mod widget;
 
 fn main() -> Result {
+	// The program can be told to look for VST2 plugins instead of starting. That's how
+	// the plugins are found: some of them crash when they're made, and a crash takes the
+	// whole program with it.
+	if let Some(paths) = generic_daw_core::vst2_host::scan::paths_from_args(std::env::args().skip(1))
+	{
+		generic_daw_core::vst2_host::scan::print_plugins(&paths);
+		return Ok(());
+	}
+
 	install_panic_hook();
 
 	env_logger::builder()

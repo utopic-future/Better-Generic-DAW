@@ -1,17 +1,20 @@
 use crate::{
 	action::Action,
 	clap_host::{ClapHost, PluginId},
-	components::{icon_button, menu_entry, text_icon_button},
+	components::{MenuItem, icon_button, menu, menu_entry, menu_width, text_icon_button},
 	config::Config,
 	daw::{self, Tab},
 	file_tree::FileKind,
 	icons::{
-		arrow_up_down, chevron_down, chevron_up, chevrons_left_right_ellipsis, circle_ellipsis,
-		copy, grip_horizontal, grip_vertical, midi_port, plus, power, power_off, rotate_ccw,
-		snowflake, volume_2, x,
+		arrow_left_right, arrow_up_down, check, chevron_down, chevron_up,
+		chevrons_left_right_ellipsis, circle_ellipsis, clipboard_paste, copy, flip_horizontal,
+		gauge, grip_horizontal, grip_vertical, keyboard_music, magnet, midi_port, plus, power,
+		music_2, power_off, repeat as repeat_icon, rotate_ccw, sliders_vertical, snowflake,
+		square_split_horizontal, trash_2, volume_2, x,
 	},
 	operation::scroll_into_view,
 	plugin_descriptor::PluginDescriptor,
+	shortcuts::Action as ShortcutAction,
 	state::{DEFAULT_SPLIT_WIDTH, MIN_SPLIT_WIDTH, State},
 	stylefns::{
 		button_with_radius, container_with_radius, selectable_box, slider_with_radius, split_style,
@@ -19,10 +22,11 @@ use crate::{
 		sweeten_row_with_radius, text_input_transparent, weak_bordered_box, weaker_bordered_box,
 		weakest_bordered_box,
 	},
+	vst2_host::Vst2Host,
 	vst3_host::Vst3Host,
 	widget::{
 		Clip, Delta, LINE_HEIGHT, Note, Piano, PianoRoll, Playlist, Seeker, TEXT_HEIGHT, Track,
-		frames_per_px, piano_roll, playlist,
+		frames_per_px, piano_roll, playlist::{self, ContextTarget},
 	},
 };
 use generic_daw_core::{
@@ -40,14 +44,13 @@ use generic_daw_widget::{
 use iced::{
 	Center, Element, Fill, Shrink, Subscription, Task, Vector, border,
 	futures::SinkExt as _,
-	keyboard,
 	mouse::Interaction,
 	padding, stream,
 	time::every,
 	widget::{
 		button, center, center_x, center_y, column, container, mouse_area, opaque,
-		operation::snap_to_end, row, rule, scrollable, slider, space, text, text_input,
-		vertical_slider,
+		operation::focus, operation::snap_to_end, row, rule, scrollable, slider, space, text,
+		text_input, vertical_slider,
 	},
 	window::frames,
 };
@@ -74,6 +77,7 @@ mod arrangement;
 mod audio_recording;
 mod channel;
 mod clip;
+mod history;
 mod midi_pattern;
 mod midi_recording;
 mod node;
@@ -109,6 +113,7 @@ pub enum Message {
 	ChannelSelect(NodeId),
 	ChannelDuplicate(NodeId),
 	ChannelNameChanged(NodeId, Arc<str>),
+	ChannelRename(NodeId),
 	ChannelVolumeChanged(NodeId, f32),
 	ChannelPanChanged(NodeId, PanMode),
 	ChannelToggleEnabled(NodeId),
@@ -121,6 +126,8 @@ pub enum Message {
 	PluginMove(NodeId, DragEvent),
 	PluginDuplicate(NodeId, usize),
 	PluginSetState(NodeId, usize, NoDebug<Box<[u8]>>),
+	PluginCopyState(NodeId, usize),
+	PluginPasteState(NodeId, usize),
 	PluginShow(PluginId),
 	PluginMixChanged(NodeId, usize, f32),
 	PluginToggleActive(NodeId, usize),
@@ -152,6 +159,19 @@ pub enum Message {
 
 	PlaylistAction(playlist::Action),
 	PianoRollAction(piano_roll::Action),
+	/// Something the user wants to do to a clip.
+	ClipAction(usize, usize, playlist::ClipAction),
+	/// Turns the grid on or off.
+	ToggleGrid,
+	/// Makes the grid finer.
+	NarrowedGrid,
+	/// Makes the grid coarser.
+	WidenedGrid,
+	/// Turns the triplets in the grid on or off.
+	ToggleGridTriplets,
+	/// Sets the start or the end of the loop.
+	SetLoopMarkerStart,
+	SetLoopMarkerEnd,
 
 	ArrowUp(Tab),
 	ArrowDown(Tab),
@@ -183,10 +203,12 @@ pub struct ArrangementView {
 
 	playlist: RefCell<playlist::State>,
 	piano_roll: RefCell<piano_roll::State>,
-	midi_clip: Option<(usize, usize)>,
+	midi_clip_id: Option<(usize, usize)>,
 
 	selected: NodeId,
 	loading: usize,
+
+	history: history::History,
 }
 
 impl ArrangementView {
@@ -229,14 +251,50 @@ impl ArrangementView {
 				Vector::new(view.piano_roll.position.x, view.piano_roll.position.y),
 				Vector::new(view.piano_roll.scale.x, view.piano_roll.scale.y),
 			)),
-			midi_clip: None,
+			midi_clip_id: None,
 
 			selected,
 			loading: 0,
+
+			history: history::History::default(),
 		}
 	}
 
 	pub fn update(
+		&mut self,
+		message: Message,
+		config: &Config,
+		state: &mut State,
+	) -> Action<daw::Instruction, Message> {
+		let ends_gesture = Self::ends_gesture(&message);
+
+		self.history.begin();
+		let action = self.update_inner(message, config, state);
+		let commit = ends_gesture || !self.is_dragging();
+		self.history.end(&mut self.arrangement, commit);
+		action
+	}
+
+	/// Whether a message is a separate edit, even if the mouse is held down.
+	fn ends_gesture(message: &Message) -> bool {
+		!matches!(
+			message,
+			Message::Batch(_)
+				| Message::DrainQueue
+				| Message::RequestUpdate
+				| Message::ChangeConfig(_)
+				| Message::PlaylistAction(_)
+				| Message::PianoRollAction(_)
+		)
+	}
+
+	/// Whether the user is in the middle of a mouse gesture.
+	fn is_dragging(&self) -> bool {
+		self.playlist.borrow().status != playlist::Status::None
+			|| self.piano_roll.borrow().status != piano_roll::Status::None
+	}
+
+	fn update_inner(
 		&mut self,
 		message: Message,
 		config: &Config,
@@ -258,6 +316,11 @@ impl ArrangementView {
 			Message::SetMix(from, to, mix) => self.arrangement.set_mix(from, to, mix),
 			Message::Disconnect(from, to) => self.arrangement.disconnect(from, to),
 			Message::ToggleKind(node) => {
+				// Turning a track into a channel throws its clips away.
+				if self.arrangement.node(node).ty == NodeType::Track {
+					self.history.clear(&mut self.arrangement);
+				}
+
 				if let Some(track) = self.arrangement.toggle_kind(node) {
 					self.update_selection(|c| update_selection_delete_track(c, track));
 				}
@@ -325,6 +388,48 @@ impl ArrangementView {
 			}
 			Message::ChannelNameChanged(node, name) => {
 				self.arrangement.channel_name_changed(node, name);
+			}
+			Message::ChannelRename(node) => {
+				let id = self.arrangement.node(node).name_id.clone();
+				return focus(id).into();
+			}
+			Message::ToggleGrid => {
+				state.grid.enabled ^= true;
+				state.write();
+			}
+			Message::NarrowedGrid => {
+				return Action::instruction(daw::Instruction::Message(
+					daw::Message::ChangedGridSize(state.grid.size - 1.0),
+				));
+			}
+			Message::WidenedGrid => {
+				return Action::instruction(daw::Instruction::Message(
+					daw::Message::ChangedGridSize(state.grid.size + 1.0),
+				));
+			}
+			Message::ToggleGridTriplets => {
+				state.grid.triplets ^= true;
+				state.write();
+			}
+			Message::SetLoopMarkerStart => {
+				let transport = self.arrangement.transport();
+				let pos = transport.position.to_beat_time(transport);
+				let range = transport.loop_range.map_or_else(
+					|| BeatRange::new(pos, pos + BeatTime::BEAT * 4.0),
+					|range| BeatRange::new(pos, range.end()),
+				);
+
+				self.arrangement.set_loop_range(Some(range));
+			}
+			Message::SetLoopMarkerEnd => {
+				let transport = self.arrangement.transport();
+				let pos = transport.position.to_beat_time(transport);
+				let range = transport.loop_range.map_or_else(
+					|| BeatRange::new(pos - BeatTime::BEAT * 4.0, pos),
+					|range| BeatRange::new(range.start(), pos),
+				);
+
+				self.arrangement.set_loop_range(Some(range));
 			}
 			Message::ChannelVolumeChanged(node, mut volume) => {
 				let db = amp_to_db(volume.abs());
@@ -425,6 +530,18 @@ impl ArrangementView {
 					plugin.set_state_message(state.0),
 				));
 			}
+			Message::PluginCopyState(node, i) => {
+				let plugin = &self.arrangement.node(node).plugins[i];
+				return Action::instruction(daw::Instruction::Message(
+					daw::Message::PluginCopyState(plugin.id),
+				));
+			}
+			Message::PluginPasteState(node, i) => {
+				let plugin = &self.arrangement.node(node).plugins[i];
+				return Action::instruction(daw::Instruction::Message(
+					daw::Message::PluginPasteState(plugin.id),
+				));
+			}
 			Message::PluginShow(plugin) => {
 				if let Some((node, i)) = self.arrangement.plugin_of(plugin) {
 					return Action::instruction(daw::Instruction::Message(
@@ -471,6 +588,7 @@ impl ArrangementView {
 					(track, self.update(Message::TrackAdd, config, state))
 				};
 				let clip = self.arrangement.add_audio_clip_from_sample(track, pos, id);
+				history::record_clip_add(&mut self.arrangement, &mut self.history, track, clip);
 				self.playlist.get_mut().primary.insert((track, clip));
 				return task;
 			}
@@ -484,6 +602,7 @@ impl ArrangementView {
 					(track, self.update(Message::TrackAdd, config, state))
 				};
 				let clip = self.arrangement.add_midi_clip_from_pattern(track, pos, id);
+				history::record_clip_add(&mut self.arrangement, &mut self.history, track, clip);
 				self.playlist.get_mut().primary.insert((track, clip));
 				return task;
 			}
@@ -522,6 +641,9 @@ impl ArrangementView {
 						self.select_prev();
 					}
 				}
+
+				// Undo steps can point at clips of the track, so they can't stay.
+				self.history.clear(&mut self.arrangement);
 
 				let track = self.arrangement.remove_track(node);
 				self.update_selection(|c| update_selection_delete_track(c, track));
@@ -574,6 +696,7 @@ impl ArrangementView {
 				self.update_selection(|c| Some(update_selection_insert_track(c, track)));
 
 				let clip = self.arrangement.add_audio_clip_from_sample(track, pos, id);
+				history::record_clip_add(&mut self.arrangement, &mut self.history, track, clip);
 				self.playlist.get_mut().primary.insert((track, clip));
 
 				for (outgoing, mix) in self.arrangement.node(node).outgoing.clone() {
@@ -589,6 +712,9 @@ impl ArrangementView {
 			}
 			Message::PlaylistAction(action) => {
 				return self.handle_playlist_action(action, config, state);
+			}
+			Message::ClipAction(track, clip, action) => {
+				return self.handle_clip_action(track, clip, action, config, state);
 			}
 			Message::PianoRollAction(action) => self.handle_piano_roll_action(action),
 			Message::ArrowUp(tab) => match tab {
@@ -720,17 +846,30 @@ impl ArrangementView {
 					let snap_step = state
 						.grid
 						.beats_snap_step(playlist.scale, self.arrangement.transport());
-					for &(track, clip) in &playlist.primary {
+					let clips = playlist.primary.iter().copied().collect::<Vec<_>>();
+					for (track, clip) in clips {
+						let before = history::ClipSnapshot::of(&self.arrangement, track, clip);
 						let pos = self.arrangement.tracks()[track].clips[clip]
 							.start()
 							.round(snap_step);
 
 						self.arrangement.clip_move_to(track, clip, pos);
+
+						if let Some(before) = before {
+							history::record_clip_change(
+								&mut self.arrangement,
+								&mut self.history,
+								before,
+							);
+						}
 					}
 				}
 				Tab::Mixer => {}
 				Tab::PianoRoll => {
 					if let Some(clip) = self.midi_clip() {
+						let before = self.arrangement.midi_patterns()[&clip.pattern]
+							.notes
+							.clone();
 						let piano_roll = self.piano_roll.get_mut();
 						piano_roll.finish();
 						let snap_step = state
@@ -746,6 +885,13 @@ impl ArrangementView {
 							self.arrangement
 								.note_trim_start_to(clip.pattern, note, pos.start());
 						}
+
+						history::record_pattern_changes(
+							&mut self.arrangement,
+							&mut self.history,
+							clip.pattern,
+							&before,
+						);
 					}
 				}
 			},
@@ -753,6 +899,9 @@ impl ArrangementView {
 				Tab::Playlist | Tab::Mixer => {}
 				Tab::PianoRoll => {
 					if let Some(clip) = self.midi_clip() {
+						let before = self.arrangement.midi_patterns()[&clip.pattern]
+							.notes
+							.clone();
 						let piano_roll = self.piano_roll.get_mut();
 						piano_roll.finish();
 						let mut sorted = piano_roll.primary.drain().collect::<Vec<_>>();
@@ -810,6 +959,13 @@ impl ArrangementView {
 						}
 
 						piano_roll.primary.extend(sorted);
+
+						history::record_pattern_changes(
+							&mut self.arrangement,
+							&mut self.history,
+							clip.pattern,
+							&before,
+						);
 					}
 				}
 			},
@@ -1015,8 +1171,17 @@ impl ArrangementView {
 				Tab::Playlist => {
 					let playlist = self.playlist.get_mut();
 					playlist.finish();
-					for &(track, clip) in &playlist.primary {
+					let clips = playlist.primary.iter().copied().collect::<Vec<_>>();
+					for (track, clip) in clips {
+						let before = history::ClipSnapshot::of(&self.arrangement, track, clip);
 						self.arrangement.clip_reverse(track, clip);
+						if let Some(before) = before {
+							history::record_clip_change(
+								&mut self.arrangement,
+								&mut self.history,
+								before,
+							);
+						}
 					}
 				}
 				Tab::Mixer | Tab::PianoRoll => {}
@@ -1025,8 +1190,17 @@ impl ArrangementView {
 				Tab::Playlist => {
 					let playlist = self.playlist.get_mut();
 					playlist.finish();
-					for &(track, clip) in &playlist.primary {
+					let clips = playlist.primary.iter().copied().collect::<Vec<_>>();
+					for (track, clip) in clips {
+						let before = history::ClipSnapshot::of(&self.arrangement, track, clip);
 						self.arrangement.clip_normalize(track, clip);
+						if let Some(before) = before {
+							history::record_clip_change(
+								&mut self.arrangement,
+								&mut self.history,
+								before,
+							);
+						}
 					}
 				}
 				Tab::Mixer | Tab::PianoRoll => {}
@@ -1138,8 +1312,8 @@ impl ArrangementView {
 				};
 			}
 			playlist::Action::Open(track, clip) => {
-				if self.midi_clip != Some((track, clip)) {
-					self.midi_clip = Some((track, clip));
+				if self.midi_clip_id != Some((track, clip)) {
+					self.midi_clip_id = Some((track, clip));
 					self.piano_roll.get_mut().clear();
 				}
 				return Action::instruction(daw::Instruction::Message(daw::Message::TopPane(
@@ -1150,7 +1324,14 @@ impl ArrangementView {
 				let mut sorted = primary.drain().collect::<Vec<_>>();
 				sorted.sort_unstable_by_key(|&(_, c)| c);
 				for (track, clip) in sorted {
-					primary.insert((track, self.arrangement.duplicate_clip(track, clip)));
+					let new_clip = self.arrangement.duplicate_clip(track, clip);
+					history::record_clip_add(
+						&mut self.arrangement,
+						&mut self.history,
+						track,
+						new_clip,
+					);
+					primary.insert((track, new_clip));
 				}
 			}
 			playlist::Action::Drag(track_diff, pos_diff) => {
@@ -1164,11 +1345,20 @@ impl ArrangementView {
 				}
 
 				for (track, clip) in sorted {
+					let before = history::ClipSnapshot::of(&self.arrangement, track, clip);
 					let pos = self.arrangement.tracks()[track].clips[clip].start();
 					self.arrangement.clip_move_to(track, clip, pos + pos_diff);
 
 					let new_track = (track + track_diff).min(self.arrangement.tracks().len() - 1);
 					let new_clip = self.arrangement.clip_switch_track(track, clip, new_track);
+
+					if let Some(before) = before {
+						history::record_clip_change(
+							&mut self.arrangement,
+							&mut self.history,
+							before,
+						);
+					}
 
 					self.update_selection(|c| {
 						Some(update_selection_move_clip(
@@ -1178,110 +1368,171 @@ impl ArrangementView {
 				}
 			}
 			playlist::Action::TrimStart(pos_diff) => {
-				for &(track, clip) in &*primary {
-					let pos = self.arrangement.tracks()[track].clips[clip].start();
-					self.arrangement
-						.clip_trim_start_to(track, clip, pos + pos_diff);
-				}
+				let clips = primary.iter().copied().collect::<Vec<_>>();
+				edit_clips(
+					&mut self.arrangement,
+					&mut self.history,
+					clips,
+					|arrangement, track, clip| {
+						let pos = arrangement.tracks()[track].clips[clip].start();
+						arrangement.clip_trim_start_to(track, clip, pos + pos_diff);
+					},
+				);
 			}
 			playlist::Action::TrimEnd(pos_diff) => {
-				for &(track, clip) in &*primary {
-					let pos = self.arrangement.tracks()[track].clips[clip]
-						.end(self.arrangement.transport());
-					self.arrangement
-						.clip_trim_end_to(track, clip, pos + pos_diff);
-				}
+				let clips = primary.iter().copied().collect::<Vec<_>>();
+				edit_clips(
+					&mut self.arrangement,
+					&mut self.history,
+					clips,
+					|arrangement, track, clip| {
+						let pos = arrangement.tracks()[track].clips[clip]
+							.end(arrangement.transport());
+						arrangement.clip_trim_end_to(track, clip, pos + pos_diff);
+					},
+				);
 			}
 			playlist::Action::InvertPolarity => {
-				for &(track, clip) in &*primary {
-					if let generic_daw_core::Clip::Audio(audio) =
-						&self.arrangement.tracks()[track].clips[clip]
-					{
-						self.arrangement
-							.clip_volume_changed(track, clip, -audio.volume);
-					}
-				}
+				let clips = primary.iter().copied().collect::<Vec<_>>();
+				edit_clips(
+					&mut self.arrangement,
+					&mut self.history,
+					clips,
+					|arrangement, track, clip| {
+						if let generic_daw_core::Clip::Audio(audio) =
+							&arrangement.tracks()[track].clips[clip]
+						{
+							arrangement.clip_volume_changed(track, clip, -audio.volume);
+						}
+					},
+				);
 			}
 			playlist::Action::DragVolume(vol_diff) => {
 				let vol_diff = db_to_amp(vol_diff);
-				for &(track, clip) in &*primary {
-					if let generic_daw_core::Clip::Audio(audio) =
-						&self.arrangement.tracks()[track].clips[clip]
-					{
-						self.arrangement
-							.clip_volume_changed(track, clip, audio.volume * vol_diff);
-					}
-				}
+				let clips = primary.iter().copied().collect::<Vec<_>>();
+				edit_clips(
+					&mut self.arrangement,
+					&mut self.history,
+					clips,
+					|arrangement, track, clip| {
+						if let generic_daw_core::Clip::Audio(audio) =
+							&arrangement.tracks()[track].clips[clip]
+						{
+							arrangement.clip_volume_changed(track, clip, audio.volume * vol_diff);
+						}
+					},
+				);
 			}
 			playlist::Action::FadeStartLen(pos_diff) => {
 				let pos_diff =
 					pos_diff.map(|pos_diff| pos_diff.to_seconds_time(self.arrangement.transport()));
-
-				for &(track, clip) in &*primary {
-					if let generic_daw_core::Clip::Audio(audio) =
-						&self.arrangement.tracks()[track].clips[clip]
-					{
-						self.arrangement.clip_fade_start_len(
-							track,
-							clip,
-							audio.fade_start.len + pos_diff,
-						);
-					}
-				}
+				let clips = primary.iter().copied().collect::<Vec<_>>();
+				edit_clips(
+					&mut self.arrangement,
+					&mut self.history,
+					clips,
+					|arrangement, track, clip| {
+						if let generic_daw_core::Clip::Audio(audio) =
+							&arrangement.tracks()[track].clips[clip]
+						{
+							arrangement.clip_fade_start_len(
+								track,
+								clip,
+								audio.fade_start.len + pos_diff,
+							);
+						}
+					},
+				);
 			}
 			playlist::Action::FadeStartP(p) => {
-				for &(track, clip) in &*primary {
-					self.arrangement
-						.clip_fade_start_p(track, clip, Point { x: p.x, y: p.y });
-				}
+				let clips = primary.iter().copied().collect::<Vec<_>>();
+				edit_clips(
+					&mut self.arrangement,
+					&mut self.history,
+					clips,
+					|arrangement, track, clip| {
+						arrangement.clip_fade_start_p(track, clip, Point { x: p.x, y: p.y });
+					},
+				);
 			}
 			playlist::Action::FadeStartToggleSymmetric => {
-				for &(track, clip) in &*primary {
-					self.arrangement
-						.clip_fade_start_toggle_symmetric(track, clip);
-				}
+				let clips = primary.iter().copied().collect::<Vec<_>>();
+				edit_clips(
+					&mut self.arrangement,
+					&mut self.history,
+					clips,
+					|arrangement, track, clip| {
+						arrangement.clip_fade_start_toggle_symmetric(track, clip);
+					},
+				);
 			}
 			playlist::Action::FadeEndLen(pos_diff) => {
 				let pos_diff =
 					pos_diff.map(|pos_diff| pos_diff.to_seconds_time(self.arrangement.transport()));
-
-				for &(track, clip) in &*primary {
-					if let generic_daw_core::Clip::Audio(audio) =
-						&self.arrangement.tracks()[track].clips[clip]
-					{
-						self.arrangement.clip_fade_end_len(
-							track,
-							clip,
-							audio.fade_end.len + pos_diff,
-						);
-					}
-				}
+				let clips = primary.iter().copied().collect::<Vec<_>>();
+				edit_clips(
+					&mut self.arrangement,
+					&mut self.history,
+					clips,
+					|arrangement, track, clip| {
+						if let generic_daw_core::Clip::Audio(audio) =
+							&arrangement.tracks()[track].clips[clip]
+						{
+							arrangement.clip_fade_end_len(
+								track,
+								clip,
+								audio.fade_end.len + pos_diff,
+							);
+						}
+					},
+				);
 			}
 			playlist::Action::FadeEndP(p) => {
-				for &(track, clip) in &*primary {
-					self.arrangement
-						.clip_fade_end_p(track, clip, Point { x: p.x, y: p.y });
-				}
+				let clips = primary.iter().copied().collect::<Vec<_>>();
+				edit_clips(
+					&mut self.arrangement,
+					&mut self.history,
+					clips,
+					|arrangement, track, clip| {
+						arrangement.clip_fade_end_p(track, clip, Point { x: p.x, y: p.y });
+					},
+				);
 			}
 			playlist::Action::FadeEndToggleSymmetric => {
-				for &(track, clip) in &*primary {
-					self.arrangement.clip_fade_end_toggle_symmetric(track, clip);
-				}
+				let clips = primary.iter().copied().collect::<Vec<_>>();
+				edit_clips(
+					&mut self.arrangement,
+					&mut self.history,
+					clips,
+					|arrangement, track, clip| {
+						arrangement.clip_fade_end_toggle_symmetric(track, clip);
+					},
+				);
 			}
 			playlist::Action::StretchStart(pos_diff) => {
-				for &(track, clip) in &*primary {
-					let pos = self.arrangement.tracks()[track].clips[clip].start();
-					self.arrangement
-						.clip_stretch_start_to(track, clip, pos + pos_diff);
-				}
+				let clips = primary.iter().copied().collect::<Vec<_>>();
+				edit_clips(
+					&mut self.arrangement,
+					&mut self.history,
+					clips,
+					|arrangement, track, clip| {
+						let pos = arrangement.tracks()[track].clips[clip].start();
+						arrangement.clip_stretch_start_to(track, clip, pos + pos_diff);
+					},
+				);
 			}
 			playlist::Action::StretchEnd(pos_diff) => {
-				for &(track, clip) in &*primary {
-					let pos = self.arrangement.tracks()[track].clips[clip]
-						.end(self.arrangement.transport());
-					self.arrangement
-						.clip_stretch_end_to(track, clip, pos + pos_diff);
-				}
+				let clips = primary.iter().copied().collect::<Vec<_>>();
+				edit_clips(
+					&mut self.arrangement,
+					&mut self.history,
+					clips,
+					|arrangement, track, clip| {
+						let pos = arrangement.tracks()[track].clips[clip]
+							.end(arrangement.transport());
+						arrangement.clip_stretch_end_to(track, clip, pos + pos_diff);
+					},
+				);
 			}
 			playlist::Action::SplitAt(mut pos) => {
 				let mut sorted = primary
@@ -1296,6 +1547,7 @@ impl ArrangementView {
 				sorted.sort_unstable_by_key(|&(_, c)| c);
 
 				for (track, lhs) in sorted {
+					let before = history::ClipSnapshot::of(&self.arrangement, track, lhs);
 					let clip = self.arrangement.tracks()[track].clips[lhs];
 					if clip.end(self.arrangement.transport()) == pos {
 						primary.insert((track, lhs));
@@ -1312,6 +1564,19 @@ impl ArrangementView {
 						self.arrangement
 							.clip_fade_start_len(track, rhs, SecondsTime::ZERO);
 						self.arrangement.clip_trim_start_to(track, rhs, pos);
+						history::record_clip_add(
+							&mut self.arrangement,
+							&mut self.history,
+							track,
+							rhs,
+						);
+						if let Some(before) = before {
+							history::record_clip_change(
+								&mut self.arrangement,
+								&mut self.history,
+								before,
+							);
+						}
 						primary.insert((track, lhs));
 						secondary.insert((track, rhs));
 					}
@@ -1340,22 +1605,38 @@ impl ArrangementView {
 						.or_insert_with(|| new.min(pos));
 				}
 
-				for &(track, lhs) in &*primary {
-					self.arrangement
-						.clip_trim_end_to(track, lhs, clamped[&track]);
-				}
+				let lhs = primary.iter().copied().collect::<Vec<_>>();
+				edit_clips(
+					&mut self.arrangement,
+					&mut self.history,
+					lhs,
+					|arrangement, track, clip| {
+						arrangement.clip_trim_end_to(track, clip, clamped[&track]);
+					},
+				);
 
-				for &(track, rhs) in &*secondary {
-					self.arrangement
-						.clip_trim_start_to(track, rhs, clamped[&track]);
-				}
+				let rhs = secondary.iter().copied().collect::<Vec<_>>();
+				edit_clips(
+					&mut self.arrangement,
+					&mut self.history,
+					rhs,
+					|arrangement, track, clip| {
+						arrangement.clip_trim_start_to(track, clip, clamped[&track]);
+					},
+				);
 			}
 			playlist::Action::DragSlip(pos_diff) => {
-				for &(track, clip) in &*primary {
-					let pos = self.arrangement.tracks()[track].clips[clip]
-						.offset(self.arrangement.transport());
-					self.arrangement.clip_slip_to(track, clip, pos + pos_diff);
-				}
+				let clips = primary.iter().copied().collect::<Vec<_>>();
+				edit_clips(
+					&mut self.arrangement,
+					&mut self.history,
+					clips,
+					|arrangement, track, clip| {
+						let pos = arrangement.tracks()[track].clips[clip]
+							.offset(arrangement.transport());
+						arrangement.clip_slip_to(track, clip, pos + pos_diff);
+					},
+				);
 			}
 			playlist::Action::Delete => {
 				let mut sorted = primary.drain().collect::<Vec<_>>();
@@ -1363,13 +1644,83 @@ impl ArrangementView {
 				for (track, clip) in sorted {
 					self.update_selection(|c| update_selection_delete_clip(c, track, clip));
 
-					let clip = self.arrangement.remove_clip(track, clip);
-					self.arrangement.gc(clip);
+					let track_id = self.arrangement.tracks()[track].id;
+					let removed = self.arrangement.detach_clip(track, clip);
+					history::record_clip_remove(
+						&mut self.arrangement,
+						&mut self.history,
+						track_id,
+						clip,
+						removed,
+					);
 				}
 			}
+			playlist::Action::Finished => {}
 		}
 
 		Action::none()
+	}
+
+	/// Does something to a clip of the playlist.
+	fn handle_clip_action(
+		&mut self,
+		track: usize,
+		clip: usize,
+		action: playlist::ClipAction,
+		config: &Config,
+		state: &mut State,
+	) -> Action<daw::Instruction, Message> {
+		if track >= self.arrangement.tracks().len()
+			|| clip >= self.arrangement.tracks()[track].clips.len()
+		{
+			return Action::none();
+		}
+
+		// the clip the user picked is the one the action is about
+		{
+			let playlist = self.playlist.get_mut();
+			playlist.primary.clear();
+			playlist.primary.insert((track, clip));
+		}
+
+		match action {
+			playlist::ClipAction::Duplicate => {
+				self.handle_playlist_action(playlist::Action::Clone, config, state)
+			}
+			playlist::ClipAction::Delete => {
+				self.handle_playlist_action(playlist::Action::Delete, config, state)
+			}
+			playlist::ClipAction::Reverse => {
+				self.update(Message::Reverse(Tab::Playlist), config, state)
+			}
+			playlist::ClipAction::Normalize => {
+				self.update(Message::Normalize(Tab::Playlist), config, state)
+			}
+			playlist::ClipAction::InvertPolarity => {
+				self.update(Message::Invert(Tab::Playlist), config, state)
+			}
+			playlist::ClipAction::Split => {
+				let transport = self.arrangement.transport();
+				let pos = transport.position.to_beat_time(transport);
+
+				self.handle_playlist_action(playlist::Action::SplitAt(pos), config, state)
+			}
+			playlist::ClipAction::OpenInPianoRoll => {
+				self.handle_playlist_action(playlist::Action::Open(track, clip), config, state)
+			}
+			playlist::ClipAction::Quantize => {
+				// the notes of the clip are quantized in the piano roll
+				self.midi_clip_id = Some((track, clip));
+				self.piano_roll.get_mut().clear();
+
+				if let Some(clip) = self.midi_clip() {
+					let notes = self.arrangement.midi_patterns()[&clip.pattern].notes.len();
+					self.piano_roll.get_mut().primary.extend(0..notes);
+				}
+
+				self.update(Message::Quantize(Tab::PianoRoll), config, state)
+			}
+		}
 	}
 
 	fn handle_piano_roll_action(&mut self, action: piano_roll::Action) {
@@ -1416,44 +1767,95 @@ impl ArrangementView {
 					},
 				);
 				self.piano_roll.get_mut().primary.insert(note);
+				history::record_note_add(
+					&mut self.arrangement,
+					&mut self.history,
+					clip.pattern,
+					note,
+				);
+				self.preview_midi_note(key, 1.0);
 			}
 			piano_roll::Action::Clone => {
 				let mut sorted = primary.drain().collect::<Vec<_>>();
 				sorted.sort_unstable();
 				for note in sorted {
-					primary.insert(self.arrangement.duplicate_note(clip.pattern, note));
+					let new_note = self.arrangement.duplicate_note(clip.pattern, note);
+					history::record_note_add(
+						&mut self.arrangement,
+						&mut self.history,
+						clip.pattern,
+						new_note,
+					);
+					primary.insert(new_note);
 				}
 			}
 			piano_roll::Action::Drag(key_diff, pos_diff) => {
+				let mut preview = None;
+
 				for &note in &*primary {
-					let pos = self.arrangement.midi_patterns()[&clip.pattern].notes[note]
-						.position
-						.start();
+					let before = self.arrangement.midi_patterns()[&clip.pattern].notes[note];
+					let pos = before.position.start();
 					self.arrangement
 						.note_move_to(clip.pattern, note, pos + pos_diff);
 
 					let key = self.arrangement.midi_patterns()[&clip.pattern].notes[note].key;
+					let velocity = self.arrangement.midi_patterns()[&clip.pattern].notes[note]
+						.velocity;
+					let new_key = key + key_diff;
+
 					self.arrangement
-						.note_change_key(clip.pattern, note, key + key_diff);
+						.note_change_key(clip.pattern, note, new_key);
+
+					history::record_note_change(
+						&mut self.arrangement,
+						&mut self.history,
+						clip.pattern,
+						before,
+					);
+
+					preview.get_or_insert((new_key, velocity));
+				}
+
+				// Only a new key is worth hearing, moving a note doesn't change its pitch.
+				let key_changed = match key_diff {
+					Delta::Positive(diff) | Delta::Negative(diff) => diff.0 != 0,
+				};
+
+				if key_changed
+					&& let Some((key, velocity)) = preview
+				{
+					self.preview_midi_note(key, velocity);
 				}
 			}
 			piano_roll::Action::TrimStart(pos_diff) => {
-				for &note in &*primary {
-					let pos = self.arrangement.midi_patterns()[&clip.pattern].notes[note]
-						.position
-						.start();
-					self.arrangement
-						.note_trim_start_to(clip.pattern, note, pos + pos_diff);
-				}
+				let notes = primary.iter().copied().collect::<Vec<_>>();
+				edit_notes(
+					&mut self.arrangement,
+					&mut self.history,
+					clip.pattern,
+					notes,
+					|arrangement, note| {
+						let pos = arrangement.midi_patterns()[&clip.pattern].notes[note]
+							.position
+							.start();
+						arrangement.note_trim_start_to(clip.pattern, note, pos + pos_diff);
+					},
+				);
 			}
 			piano_roll::Action::TrimEnd(pos_diff) => {
-				for &note in &*primary {
-					let pos = self.arrangement.midi_patterns()[&clip.pattern].notes[note]
-						.position
-						.end();
-					self.arrangement
-						.note_trim_end_to(clip.pattern, note, pos + pos_diff);
-				}
+				let notes = primary.iter().copied().collect::<Vec<_>>();
+				edit_notes(
+					&mut self.arrangement,
+					&mut self.history,
+					clip.pattern,
+					notes,
+					|arrangement, note| {
+						let pos = arrangement.midi_patterns()[&clip.pattern].notes[note]
+							.position
+							.end();
+						arrangement.note_trim_end_to(clip.pattern, note, pos + pos_diff);
+					},
+				);
 			}
 			piano_roll::Action::SplitAt(mut pos) => {
 				let mut sorted = primary
@@ -1466,7 +1868,8 @@ impl ArrangementView {
 				sorted.sort_unstable();
 
 				for lhs in sorted {
-					let note = self.arrangement.midi_patterns()[&clip.pattern].notes[lhs];
+					let before = self.arrangement.midi_patterns()[&clip.pattern].notes[lhs];
+					let note = before;
 					if note.position.end() == pos {
 						primary.insert(lhs);
 					} else if note.position.start() == pos {
@@ -1478,6 +1881,18 @@ impl ArrangementView {
 						let rhs = self.arrangement.duplicate_note(clip.pattern, lhs);
 						self.arrangement.note_trim_end_to(clip.pattern, lhs, pos);
 						self.arrangement.note_trim_start_to(clip.pattern, rhs, pos);
+						history::record_note_add(
+							&mut self.arrangement,
+							&mut self.history,
+							clip.pattern,
+							rhs,
+						);
+						history::record_note_change(
+							&mut self.arrangement,
+							&mut self.history,
+							clip.pattern,
+							before,
+						);
 						primary.insert(lhs);
 						secondary.insert(rhs);
 					}
@@ -1506,31 +1921,58 @@ impl ArrangementView {
 						.or_insert_with(|| new.min(pos));
 				}
 
-				for &lhs in &*primary {
-					let note = self.arrangement.midi_patterns()[&clip.pattern].notes[lhs];
-					self.arrangement
-						.note_trim_end_to(clip.pattern, lhs, clamped[&note.key]);
-				}
+				let notes = primary.iter().copied().collect::<Vec<_>>();
+				edit_notes(
+					&mut self.arrangement,
+					&mut self.history,
+					clip.pattern,
+					notes,
+					|arrangement, note| {
+						let key = arrangement.midi_patterns()[&clip.pattern].notes[note].key;
+						arrangement.note_trim_end_to(clip.pattern, note, clamped[&key]);
+					},
+				);
 
-				for &rhs in &*secondary {
-					let note = self.arrangement.midi_patterns()[&clip.pattern].notes[rhs];
-					self.arrangement
-						.note_trim_start_to(clip.pattern, rhs, clamped[&note.key]);
-				}
+				let notes = secondary.iter().copied().collect::<Vec<_>>();
+				edit_notes(
+					&mut self.arrangement,
+					&mut self.history,
+					clip.pattern,
+					notes,
+					|arrangement, note| {
+						let key = arrangement.midi_patterns()[&clip.pattern].notes[note].key;
+						arrangement.note_trim_start_to(clip.pattern, note, clamped[&key]);
+					},
+				);
 			}
 			piano_roll::Action::DragVelocity(val) => {
-				for &note in &*primary {
-					self.arrangement
-						.note_change_velocity(clip.pattern, note, val);
-				}
+				let notes = primary.iter().copied().collect::<Vec<_>>();
+				edit_notes(
+					&mut self.arrangement,
+					&mut self.history,
+					clip.pattern,
+					notes,
+					|arrangement, note| {
+						arrangement.note_change_velocity(clip.pattern, note, val);
+					},
+				);
 			}
 			piano_roll::Action::Delete => {
 				let mut sorted = primary.drain().collect::<Vec<_>>();
 				sorted.sort_unstable_by_key(|&n| Reverse(n));
 				for note in sorted {
+					let removed = self.arrangement.midi_patterns()[&clip.pattern].notes[note];
 					self.arrangement.remove_note(clip.pattern, note);
+					history::record_note_remove(
+						&mut self.arrangement,
+						&mut self.history,
+						clip.pattern,
+						note,
+						removed,
+					);
 				}
 			}
+			piano_roll::Action::Finished => {}
 		}
 	}
 
@@ -1540,6 +1982,277 @@ impl ArrangementView {
 			Tab::Mixer => self.view_mixer(state),
 			Tab::PianoRoll => self.view_piano_roll(state),
 		}
+	}
+
+	/// The menu of the playlist, of the clip the user right-clicked on, or of the
+	/// background.
+	fn playlist_context_menu<'a>(&'a self, state: &'a State) -> Element<'a, Message> {
+		match self.playlist.borrow().context_menu {
+			Some(ContextTarget::AudioClip(track, clip)) => {
+				Self::clip_context_menu(track, clip, false, state)
+			}
+			Some(ContextTarget::MidiClip(track, clip)) => {
+				Self::clip_context_menu(track, clip, true, state)
+			}
+			Some(ContextTarget::EmptyTrack { .. } | ContextTarget::EmptyArea { .. }) | None => {
+				Self::background_context_menu(Tab::Playlist, state)
+			}
+		}
+	}
+
+	/// The menu of a clip of the playlist.
+	fn clip_context_menu(
+		track: usize,
+		clip: usize,
+		midi: bool,
+		state: &State,
+	) -> Element<'_, Message> {
+		let shortcuts = &state.shortcuts;
+
+		let mut items = vec![
+			MenuItem::Action {
+				icon: Some(copy()),
+				label: "Duplicate".into(),
+				shortcut: shortcuts.label(ShortcutAction::Duplicate),
+				message: Message::ClipAction(track, clip, playlist::ClipAction::Duplicate),
+			},
+			MenuItem::Action {
+				icon: Some(trash_2()),
+				label: "Delete".into(),
+				shortcut: shortcuts.label(ShortcutAction::Delete),
+				message: Message::ClipAction(track, clip, playlist::ClipAction::Delete),
+			},
+		];
+
+		if midi {
+			items.insert(
+				0,
+				MenuItem::Action {
+					icon: Some(keyboard_music()),
+					label: "Open in piano roll".into(),
+					shortcut: String::new(),
+					message: Message::ClipAction(
+						track,
+						clip,
+						playlist::ClipAction::OpenInPianoRoll,
+					),
+				},
+			);
+
+			items.push(MenuItem::Separator);
+
+			items.push(MenuItem::Action {
+				icon: Some(magnet()),
+				label: "Quantize".into(),
+				shortcut: shortcuts.label(ShortcutAction::Quantize),
+				message: Message::ClipAction(track, clip, playlist::ClipAction::Quantize),
+			});
+		} else {
+			items.push(MenuItem::Separator);
+
+			items.push(MenuItem::Action {
+				icon: Some(flip_horizontal()),
+				label: "Reverse".into(),
+				shortcut: shortcuts.label(ShortcutAction::Reverse),
+				message: Message::ClipAction(track, clip, playlist::ClipAction::Reverse),
+			});
+
+			items.push(MenuItem::Action {
+				icon: Some(gauge()),
+				label: "Normalize".into(),
+				shortcut: shortcuts.label(ShortcutAction::Normalize),
+				message: Message::ClipAction(track, clip, playlist::ClipAction::Normalize),
+			});
+
+			items.push(MenuItem::Action {
+				icon: Some(arrow_up_down()),
+				label: "Invert polarity".into(),
+				shortcut: shortcuts.label(ShortcutAction::Invert),
+				message: Message::ClipAction(track, clip, playlist::ClipAction::InvertPolarity),
+			});
+
+			items.push(MenuItem::Separator);
+
+			items.push(MenuItem::Action {
+				icon: Some(square_split_horizontal()),
+				label: "Split at playhead".into(),
+				shortcut: String::new(),
+				message: Message::ClipAction(track, clip, playlist::ClipAction::Split),
+			});
+		}
+
+		menu(items)
+	}
+
+	/// The menu of the background of a tab.
+	fn background_context_menu(tab: Tab, state: &State) -> Element<'_, Message> {
+		let shortcuts = &state.shortcuts;
+
+		let mut items = vec![
+			MenuItem::Action {
+				icon: Some(check()),
+				label: "Select all".into(),
+				shortcut: shortcuts.label(ShortcutAction::SelectAll),
+				message: Message::SelectAll(tab),
+			},
+			MenuItem::Action {
+				icon: Some(x()),
+				label: "Deselect".into(),
+				shortcut: shortcuts.label(ShortcutAction::Escape),
+				message: Message::Escape(tab),
+			},
+		];
+
+		if tab == Tab::Playlist {
+			items.insert(
+				0,
+				MenuItem::Action {
+					icon: Some(plus()),
+					label: "Add track".into(),
+					shortcut: String::new(),
+					message: Message::TrackAdd,
+				},
+			);
+
+			items.push(MenuItem::Separator);
+
+			items.push(MenuItem::Action {
+				icon: Some(magnet()),
+				label: "Quantize".into(),
+				shortcut: shortcuts.label(ShortcutAction::Quantize),
+				message: Message::Quantize(tab),
+			});
+
+			items.push(MenuItem::Action {
+				icon: Some(repeat_icon()),
+				label: "Set loop start".into(),
+				shortcut: String::new(),
+				message: Message::SetLoopMarkerStart,
+			});
+
+			items.push(MenuItem::Action {
+				icon: Some(repeat_icon()),
+				label: "Set loop end".into(),
+				shortcut: String::new(),
+				message: Message::SetLoopMarkerEnd,
+			});
+		}
+
+		if tab == Tab::PianoRoll {
+			items.push(MenuItem::Separator);
+
+			items.push(MenuItem::Action {
+				icon: Some(magnet()),
+				label: "Quantize".into(),
+				shortcut: shortcuts.label(ShortcutAction::Quantize),
+				message: Message::Quantize(tab),
+			});
+
+			items.push(MenuItem::Action {
+				icon: Some(arrow_left_right()),
+				label: "Legatify".into(),
+				shortcut: shortcuts.label(ShortcutAction::Join),
+				message: Message::Join(tab),
+			});
+
+			items.push(MenuItem::Action {
+				icon: Some(keyboard_music()),
+				label: "Transpose up an octave".into(),
+				shortcut: shortcuts.label(ShortcutAction::TransposeOctaveUp),
+				message: Message::TransposeOctUp(tab),
+			});
+
+			items.push(MenuItem::Action {
+				icon: Some(keyboard_music()),
+				label: "Transpose down an octave".into(),
+				shortcut: shortcuts.label(ShortcutAction::TransposeOctaveDown),
+				message: Message::TransposeOctDown(tab),
+			});
+		}
+
+		items.push(MenuItem::Separator);
+
+		items.push(MenuItem::Submenu {
+			icon: Some(magnet()),
+			label: "Grid".into(),
+			items: vec![
+				MenuItem::Action {
+					icon: Some(plus()),
+					label: "Finer".into(),
+					shortcut: shortcuts.label(ShortcutAction::NarrowedGrid),
+					message: Message::NarrowedGrid,
+				},
+				MenuItem::Action {
+					icon: Some(x()),
+					label: "Coarser".into(),
+					shortcut: shortcuts.label(ShortcutAction::WidenedGrid),
+					message: Message::WidenedGrid,
+				},
+				MenuItem::Separator,
+				MenuItem::Toggle {
+					icon: Some(music_2()),
+					label: "Triplets".into(),
+					shortcut: shortcuts.label(ShortcutAction::ToggleGridTriplets),
+					is_on: state.grid.triplets,
+					message: Message::ToggleGridTriplets,
+				},
+				MenuItem::Toggle {
+					icon: Some(magnet()),
+					label: "On".into(),
+					shortcut: shortcuts.label(ShortcutAction::ToggleGrid),
+					is_on: state.grid.enabled,
+					message: Message::ToggleGrid,
+				},
+			],
+		});
+
+		menu(items)
+	}
+
+	/// The menu of the piano roll.
+	fn piano_roll_context_menu(state: &State) -> Element<'_, Message> {
+		Self::background_context_menu(Tab::PianoRoll, state)
+	}
+
+	/// The items that connect a node to the other nodes.
+	fn route_items(&self, node: &Node) -> Vec<MenuItem<Message>> {
+		let mut items = Vec::new();
+
+		for channel in self.arrangement.channels() {
+			let other = self.arrangement.node(channel.id);
+			let connected = node.outgoing.contains_key(&other.id);
+
+			items.push(MenuItem::Toggle {
+				icon: None,
+				label: other.name.to_string(),
+				shortcut: String::new(),
+				is_on: connected,
+				message: if connected {
+					Message::Disconnect(node.id, other.id)
+				} else {
+					Message::Connect(node.id, other.id)
+				},
+			});
+		}
+
+		for track in self.arrangement.tracks() {
+			let other = self.arrangement.node(track.id);
+			let connected = node.outgoing.contains_key(&other.id);
+
+			items.push(MenuItem::Toggle {
+				icon: None,
+				label: other.name.to_string(),
+				shortcut: String::new(),
+				is_on: connected,
+				message: if connected {
+					Message::Disconnect(node.id, other.id)
+				} else {
+					Message::Connect(node.id, other.id)
+				},
+			});
+		}
+
+		items
 	}
 
 	fn view_playlist<'a>(&'a self, state: &'a State) -> Element<'a, Message> {
@@ -1608,6 +2321,7 @@ impl ArrangementView {
 																	format!("Track {}", i + 1),
 																	&*node.name
 																)
+																.id(node.name_id.clone())
 																.on_input(|name| {
 																	Message::ChannelNameChanged(
 																		node.id,
@@ -1720,7 +2434,7 @@ impl ArrangementView {
 											]
 											.padding(padding::all(5).left(0))
 											.spacing(5),
-											|| node.main_context_menu(Tab::Playlist)
+											|| node.main_context_menu(Tab::Playlist, &state.shortcuts, Vec::new())
 										))
 										.interaction(Interaction::Pointer)
 									)
@@ -1753,75 +2467,78 @@ impl ArrangementView {
 			]
 			.spacing(5)
 			.align_x(Center),
-			Playlist::new(
-				&self.playlist,
-				self.arrangement.transport(),
-				&state.grid,
-				self.arrangement
-					.tracks()
-					.iter()
-					.enumerate()
-					.map(|(t, track)| {
-						let node = self.arrangement.node(track.id);
+			ContextMenu::new(
+				Playlist::new(
+					&self.playlist,
+					self.arrangement.transport(),
+					&state.grid,
+					self.arrangement
+						.tracks()
+						.iter()
+						.enumerate()
+						.map(|(t, track)| {
+							let node = self.arrangement.node(track.id);
 
-						let enabled = node.enabled
-							&& self.arrangement.solo().is_none_or(|solo| solo == node.id);
+							let enabled = node.enabled
+								&& self.arrangement.solo().is_none_or(|solo| solo == node.id);
 
-						Track::new(
-							track
-								.clips
-								.iter()
-								.enumerate()
-								.map(|(c, clip)| match clip {
-									generic_daw_core::Clip::Audio(clip) => Clip::new(
-										AudioClipRef {
-											sample: &self.arrangement.samples()[&clip.sample],
-											clip,
-											index: (t, c),
-										},
-										&self.playlist,
-										self.arrangement.transport(),
-										&state.grid,
-										enabled,
-										Message::PlaylistAction,
-									),
-									generic_daw_core::Clip::Midi(clip) => Clip::new(
-										MidiClipRef {
-											pattern: &self.arrangement.midi_patterns()
-												[&clip.pattern],
-											clip,
-											index: (t, c),
-										},
-										&self.playlist,
-										self.arrangement.transport(),
-										&state.grid,
-										enabled,
-										Message::PlaylistAction,
-									),
-								})
-								.chain(track.audio_recording.as_ref().map(|recording| {
-									Clip::new(
-										recording,
-										&self.playlist,
-										self.arrangement.transport(),
-										&state.grid,
-										enabled,
-										Message::PlaylistAction,
-									)
-								}))
-								.chain(track.midi_recording.as_ref().map(|recording| {
-									Clip::new(
-										recording,
-										&self.playlist,
-										self.arrangement.transport(),
-										&state.grid,
-										enabled,
-										Message::PlaylistAction,
-									)
-								})),
-						)
-					}),
-				Message::PlaylistAction,
+							Track::new(
+								track
+									.clips
+									.iter()
+									.enumerate()
+									.map(|(c, clip)| match clip {
+										generic_daw_core::Clip::Audio(clip) => Clip::new(
+											AudioClipRef {
+												sample: &self.arrangement.samples()[&clip.sample],
+												clip,
+												index: (t, c),
+											},
+											&self.playlist,
+											self.arrangement.transport(),
+											&state.grid,
+											enabled,
+											Message::PlaylistAction,
+										),
+										generic_daw_core::Clip::Midi(clip) => Clip::new(
+											MidiClipRef {
+												pattern: &self.arrangement.midi_patterns()
+													[&clip.pattern],
+												clip,
+												index: (t, c),
+											},
+											&self.playlist,
+											self.arrangement.transport(),
+											&state.grid,
+											enabled,
+											Message::PlaylistAction,
+										),
+									})
+									.chain(track.audio_recording.as_ref().map(|recording| {
+										Clip::new(
+											recording,
+											&self.playlist,
+											self.arrangement.transport(),
+											&state.grid,
+											enabled,
+											Message::PlaylistAction,
+										)
+									}))
+									.chain(track.midi_recording.as_ref().map(|recording| {
+										Clip::new(
+											recording,
+											&self.playlist,
+											self.arrangement.transport(),
+											&state.grid,
+											enabled,
+											Message::PlaylistAction,
+										)
+									})),
+							)
+						}),
+					Message::PlaylistAction,
+				),
+				move || self.playlist_context_menu(state),
 			),
 			Message::SeekTo,
 			Message::SetLoopMarker,
@@ -1844,7 +2561,7 @@ impl ArrangementView {
 
 		Split::new(
 			row![
-				self.view_channel(self.arrangement.master(), "M", None),
+				self.view_channel(state, self.arrangement.master(), "M", None),
 				(!self.arrangement.tracks().is_empty()).then(|| rule::vertical(1)),
 				scrollable(
 					row![
@@ -1854,6 +2571,7 @@ impl ArrangementView {
 								.iter()
 								.enumerate()
 								.map(|(i, track)| self.view_channel(
+									state,
 									self.arrangement.node(track.id),
 									format!("T{}", i + 1),
 									Some(track)
@@ -1869,6 +2587,7 @@ impl ArrangementView {
 								.iter()
 								.enumerate()
 								.map(|(i, channel)| self.view_channel(
+									state,
 									self.arrangement.node(channel.id),
 									format!("C{}", i + 1),
 									None
@@ -1974,21 +2693,54 @@ impl ArrangementView {
 								.align_y(Center)
 								.spacing(5),
 								move || {
-									container(column![
-										menu_entry(copy(), "Duplicate", "")
-											.on_press(Message::PluginDuplicate(self.selected, i)),
-										container(rule::horizontal(1))
-											.padding(padding::horizontal(5)),
-										menu_entry(arrow_up_down(), "Invert polarity", "")
-											.on_press(Message::PluginMixChanged(
-												self.selected,
-												i,
-												-plugin.mix
-											)),
-									])
-									.width(160)
-									.style(container_with_radius(weaker_bordered_box, 5))
-									.into()
+									menu_width(
+										vec![
+											MenuItem::Action {
+												icon: Some(sliders_vertical()),
+												label: "Show editor".into(),
+												shortcut: String::new(),
+												message: Message::PluginShow(plugin.id),
+											},
+											MenuItem::Action {
+												icon: Some(copy()),
+												label: "Duplicate".into(),
+												shortcut: String::new(),
+												message: Message::PluginDuplicate(self.selected, i),
+											},
+											MenuItem::Action {
+												icon: Some(clipboard_paste()),
+												label: "Copy state".into(),
+												shortcut: String::new(),
+												message: Message::PluginCopyState(self.selected, i),
+											},
+											MenuItem::Action {
+												icon: Some(clipboard_paste()),
+												label: "Paste state".into(),
+												shortcut: String::new(),
+												message: Message::PluginPasteState(self.selected, i),
+											},
+											MenuItem::Action {
+												icon: Some(rotate_ccw()),
+												label: "Reset mix".into(),
+												shortcut: "Ctrl-Click".into(),
+												message: Message::PluginMixChanged(self.selected, i, 1.0),
+											},
+											MenuItem::Action {
+												icon: Some(arrow_up_down()),
+												label: "Invert polarity".into(),
+												shortcut: String::new(),
+												message: Message::PluginMixChanged(self.selected, i, -plugin.mix),
+											},
+											MenuItem::Action {
+												icon: Some(trash_2()),
+												label: "Remove".into(),
+												shortcut: String::new(),
+												message: Message::PluginRemove(self.selected, i),
+											},
+											MenuItem::Separator,
+										],
+										160.0,
+									)
 								},
 							)),
 							mouse_area(
@@ -2034,6 +2786,7 @@ impl ArrangementView {
 
 	fn view_channel<'a>(
 		&'a self,
+		state: &'a State,
 		node: &'a Node,
 		placeholder: impl text::IntoFragment<'a>,
 		track: Option<&'a track::Track>,
@@ -2067,6 +2820,7 @@ impl ArrangementView {
 					mouse_area(ContextMenu::new(
 						column![
 							text_input(placeholder, &*node.name)
+								.id(node.name_id.clone())
 								.on_input(|name| Message::ChannelNameChanged(node.id, name.into()))
 								.padding(0)
 								.size(13)
@@ -2363,7 +3117,7 @@ impl ArrangementView {
 						.align_x(Center)
 						.padding(5)
 						.spacing(5),
-						|| node.main_context_menu(Tab::Mixer)
+						|| node.main_context_menu(Tab::Mixer, &state.shortcuts, self.route_items(node))
 					))
 					.interaction(Interaction::Pointer)
 				)
@@ -2405,25 +3159,28 @@ impl ArrangementView {
 				),
 			self.piano_roll.borrow().scale,
 			Piano::new(self.piano_roll.borrow().scale),
-			PianoRoll::new(
-				&self.piano_roll,
-				self.arrangement.transport(),
-				&state.grid,
-				self.arrangement.midi_patterns()[&clip.pattern]
-					.notes
-					.iter()
-					.enumerate()
-					.map(|(index, note)| {
-						Note::new(
-							index,
-							note,
-							&self.piano_roll,
-							self.arrangement.transport(),
-							&state.grid,
-							Message::PianoRollAction,
-						)
-					}),
-				Message::PianoRollAction,
+			ContextMenu::new(
+				PianoRoll::new(
+					&self.piano_roll,
+					self.arrangement.transport(),
+					&state.grid,
+					self.arrangement.midi_patterns()[&clip.pattern]
+						.notes
+						.iter()
+						.enumerate()
+						.map(|(index, note)| {
+							Note::new(
+								index,
+								note,
+								&self.piano_roll,
+								self.arrangement.transport(),
+								&state.grid,
+								Message::PianoRollAction,
+							)
+						}),
+					Message::PianoRollAction,
+				),
+				move || Self::piano_roll_context_menu(state),
 			),
 			Message::SeekTo,
 			Message::SetLoopMarker,
@@ -2440,68 +3197,41 @@ impl ArrangementView {
 	}
 
 	pub fn subscription(&self) -> Subscription<Message> {
+		let playing = self.arrangement.transport().playing;
 		Subscription::batch([
 			every(Duration::from_secs(1)).map(|_| Message::RequestUpdate),
-			if self.arrangement.queue_empty() {
+			// Only use high-frequency frames subscription when playing to reduce CPU usage
+			if playing {
+				frames().map(|_| Message::DrainQueue)
+			} else if self.arrangement.queue_empty() {
 				Subscription::none()
 			} else {
-				frames().map(|_| Message::DrainQueue)
+				every(Duration::from_millis(16)).map(|_| Message::DrainQueue)
 			},
 		])
 	}
 
-	pub fn keybinds(
-		key: &keyboard::Key,
-		physical_key: keyboard::key::Physical,
-		modifiers: keyboard::Modifiers,
-		repeat: bool,
-	) -> Option<fn(Tab) -> Message> {
-		match (
-			modifiers.command(),
-			modifiers.shift(),
-			modifiers.alt(),
-			repeat,
-		) {
-			(false, false, false, repeat) => match key.as_ref() {
-				keyboard::Key::Named(
-					keyboard::key::Named::Delete | keyboard::key::Named::Backspace,
-				) if !repeat => Some(Message::Delete),
-				keyboard::Key::Named(keyboard::key::Named::Escape) if !repeat => {
-					Some(Message::Escape)
-				}
-				keyboard::Key::Named(keyboard::key::Named::ArrowUp) => Some(Message::ArrowUp),
-				keyboard::Key::Named(keyboard::key::Named::ArrowDown) => Some(Message::ArrowDown),
-				keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => Some(Message::ArrowLeft),
-				keyboard::Key::Named(keyboard::key::Named::ArrowRight) => Some(Message::ArrowRight),
-				_ => None,
-			},
-			(true, false, false, repeat) => match key.to_latin(physical_key) {
-				Some('a') if !repeat => Some(Message::SelectAll),
-				Some('d') => Some(Message::Duplicate),
-				_ => match key.as_ref() {
-					keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-						Some(Message::TransposeOctUp)
-					}
-					keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-						Some(Message::TransposeOctDown)
-					}
-					_ => None,
-				},
-			},
-			(true, true, false, false) => match key.to_latin(physical_key) {
-				Some('a') => Some(Message::SelectInverse),
-				_ => None,
-			},
-			(false, false, true, false) => match key.to_latin(physical_key) {
-				Some('i') => Some(Message::Invert),
-				Some('j') => Some(Message::Join),
-				Some('m') => Some(Message::ToggleEnabled),
-				Some('n') => Some(Message::Normalize),
-				Some('q') => Some(Message::Quantize),
-				Some('r') => Some(Message::Reverse),
-				Some('s') => Some(Message::ToggleSolo),
-				_ => None,
-			},
+	/// The message of a shortcut that applies to the arrangement.
+	pub fn keybinds(action: ShortcutAction) -> Option<fn(Tab) -> Message> {
+		match action {
+			ShortcutAction::Delete => Some(Message::Delete),
+			ShortcutAction::Escape => Some(Message::Escape),
+			ShortcutAction::CursorUp => Some(Message::ArrowUp),
+			ShortcutAction::CursorDown => Some(Message::ArrowDown),
+			ShortcutAction::CursorLeft => Some(Message::ArrowLeft),
+			ShortcutAction::CursorRight => Some(Message::ArrowRight),
+			ShortcutAction::SelectAll => Some(Message::SelectAll),
+			ShortcutAction::SelectInverse => Some(Message::SelectInverse),
+			ShortcutAction::Duplicate => Some(Message::Duplicate),
+			ShortcutAction::TransposeOctaveUp => Some(Message::TransposeOctUp),
+			ShortcutAction::TransposeOctaveDown => Some(Message::TransposeOctDown),
+			ShortcutAction::Invert => Some(Message::Invert),
+			ShortcutAction::Join => Some(Message::Join),
+			ShortcutAction::ToggleEnabled => Some(Message::ToggleEnabled),
+			ShortcutAction::Normalize => Some(Message::Normalize),
+			ShortcutAction::Quantize => Some(Message::Quantize),
+			ShortcutAction::Reverse => Some(Message::Reverse),
+			ShortcutAction::ToggleSolo => Some(Message::ToggleSolo),
 			_ => None,
 		}
 	}
@@ -2529,7 +3259,12 @@ impl ArrangementView {
 		}
 	}
 
-	pub fn save(&self, clap_host: &mut ClapHost, vst3_host: &Vst3Host) -> Vec<u8> {
+	pub fn save(
+		&self,
+		clap_host: &mut ClapHost,
+		vst2_host: &Vst2Host,
+		vst3_host: &Vst3Host,
+	) -> Vec<u8> {
 		let playlist = self.playlist.borrow();
 		let piano_roll = self.piano_roll.borrow();
 
@@ -2556,7 +3291,7 @@ impl ArrangementView {
 			},
 		};
 
-		self.arrangement.save(clap_host, vst3_host, view)
+		self.arrangement.save(clap_host, vst2_host, vst3_host, view)
 	}
 
 	pub fn change_config(&mut self) -> Task<Message> {
@@ -2628,12 +3363,58 @@ impl ArrangementView {
 	}
 
 	fn midi_clip(&self) -> Option<MidiClip> {
-		let (track, clip) = self.midi_clip?;
-		if let generic_daw_core::Clip::Midi(clip) = self.arrangement.tracks()[track].clips[clip] {
+		let (track, clip) = self.midi_clip_id?;
+		if let generic_daw_core::Clip::Midi(clip) =
+			*self.arrangement.tracks().get(track)?.clips.get(clip)?
+		{
 			Some(clip)
 		} else {
 			None
 		}
+	}
+
+	/// Undoes the last change to the clips or notes.
+	pub fn undo(&mut self) -> bool {
+		self.change_history(false)
+	}
+
+	/// Redoes the last change that was undone.
+	pub fn redo(&mut self) -> bool {
+		self.change_history(true)
+	}
+
+	fn change_history(&mut self, redo: bool) -> bool {
+		let midi_clip = self.midi_clip().map(|clip| clip.id);
+
+		self.finish(Tab::Playlist);
+		self.finish(Tab::PianoRoll);
+
+		let changed = if redo {
+			self.history.redo(&mut self.arrangement)
+		} else {
+			self.history.undo(&mut self.arrangement)
+		};
+
+		if changed {
+			self.playlist.get_mut().clear();
+			self.piano_roll.get_mut().clear();
+			self.midi_clip_id = midi_clip.and_then(|id| self.arrangement.clip_location(id));
+		}
+
+		changed
+	}
+
+	/// Plays a note through the instrument chain of the track the piano roll belongs to.
+	fn preview_midi_note(&mut self, key: MidiKey, velocity: f32) {
+		let Some((track, _)) = self.midi_clip_id else {
+			return;
+		};
+
+		let Some(id) = self.arrangement.tracks().get(track).map(|track| track.id) else {
+			return;
+		};
+
+		self.arrangement.preview_midi_note(id, key, velocity);
 	}
 
 	fn select_prev(&mut self) {
@@ -2699,11 +3480,48 @@ impl ArrangementView {
 	}
 
 	fn update_selection(&mut self, mut f: impl FnMut((usize, usize)) -> Option<(usize, usize)>) {
-		self.midi_clip = self.midi_clip.and_then(&mut f);
+		self.midi_clip_id = self.midi_clip_id.and_then(&mut f);
 
 		let playlist = self.playlist.get_mut();
 		playlist.primary = playlist.primary.drain().filter_map(&mut f).collect();
 		playlist.secondary = playlist.secondary.drain().filter_map(&mut f).collect();
+	}
+}
+
+/// Does something to some clips, recording what changed so that it can be
+/// undone.
+fn edit_clips(
+	arrangement: &mut Arrangement,
+	history: &mut history::History,
+	clips: impl IntoIterator<Item = (usize, usize)>,
+	mut edit: impl FnMut(&mut Arrangement, usize, usize),
+) {
+	for (track, clip) in clips {
+		let before = history::ClipSnapshot::of(arrangement, track, clip);
+
+		edit(arrangement, track, clip);
+
+		if let Some(before) = before {
+			history::record_clip_change(arrangement, history, before);
+		}
+	}
+}
+
+/// Does something to some notes, recording what changed so that it can be
+/// undone.
+fn edit_notes(
+	arrangement: &mut Arrangement,
+	history: &mut history::History,
+	pattern: MidiPatternId,
+	notes: impl IntoIterator<Item = usize>,
+	mut edit: impl FnMut(&mut Arrangement, usize),
+) {
+	for note in notes {
+		let before = arrangement.midi_patterns()[&pattern].notes[note];
+
+		edit(arrangement, note);
+
+		history::record_note_change(arrangement, history, pattern, before);
 	}
 }
 

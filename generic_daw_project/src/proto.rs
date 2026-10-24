@@ -156,6 +156,8 @@ pub enum PluginFormat {
 	Clap = 0,
 	/// `id` is the 16 byte class id as 32 hex digits, see [`Plugin::vst3`].
 	Vst3 = 1,
+	/// `id` is the plugin's unique id as a number, see [`Plugin::vst2`].
+	Vst2 = 2,
 }
 
 #[derive(Clone, Copy, Message)]
@@ -341,6 +343,25 @@ impl Plugin {
 		}
 	}
 
+	/// A VST2 plugin, from its unique id.
+	///
+	/// The id is stored as a number in a C string, which is what versions that don't know
+	/// about VST2 expect to find. They don't find such a plugin, and say so, instead of
+	/// failing.
+	#[must_use]
+	pub fn vst2(unique_id: i32, state: Option<Vec<u8>>, mix: f32, active: bool) -> Self {
+		let mut id = unique_id.to_string().into_bytes();
+		id.push(0);
+
+		Self {
+			id,
+			state,
+			mix,
+			active,
+			format: PluginFormat::Vst2 as i32,
+		}
+	}
+
 	/// The id as a C string, which for VST3 plugins is the class id in hex.
 	#[must_use]
 	pub fn id(&self) -> &CStr {
@@ -360,12 +381,25 @@ impl Plugin {
 		}
 
 		let mut class_id = [0; 16];
-		for (byte, pair) in class_id.iter_mut().zip(digits.as_chunks::<2>()) {
+		for (byte, pair) in class_id.iter_mut().zip(digits.chunks_exact(2)) {
 			let digit = |c: u8| char::from(c).to_digit(16);
 			*byte = u8::try_from(digit(pair[0])? << 4 | digit(pair[1])?).ok()?;
 		}
 
 		Some(class_id)
+	}
+
+	/// The VST2 unique id, if this is a VST2 plugin with a valid one.
+	#[must_use]
+	pub fn vst2_id(&self) -> Option<i32> {
+		if self.format() != PluginFormat::Vst2 {
+			return None;
+		}
+
+		let digits = self.id.strip_suffix(&[0])?;
+		let text = std::str::from_utf8(digits).ok()?;
+
+		text.parse().ok()
 	}
 }
 

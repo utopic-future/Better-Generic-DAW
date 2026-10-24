@@ -1,4 +1,7 @@
-use crate::{LazyElement, menu_overlay::MenuOverlay};
+use crate::{
+	LazyElement,
+	menu_overlay::{Anchor, MenuOverlay},
+};
 use iced_widget::{
 	Renderer, button,
 	button::Catalog as _,
@@ -293,13 +296,11 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for Menu<'a, Mess
 			content: &mut self.menu,
 			tree: second,
 			state: &mut state.position,
-			bounds: Rectangle::new(
-				layout.position() + Vector::new(0.0, layout.bounds().height),
-				Size::new(
-					layout.bounds().width + self.spacing,
-					-layout.bounds().height - self.spacing,
-				),
-			),
+			anchor: Anchor::TopLeft(Point::new(
+				layout.position().x,
+				layout.position().y + layout.bounds().height,
+			)),
+			parent: None,
 		}));
 
 		let Some(content_overlay) =

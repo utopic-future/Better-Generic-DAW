@@ -183,20 +183,27 @@ impl AudioThread {
 
 	/// Queues an event for the next call to [`process`](Self::process).
 	///
-	/// Events can be pushed in any order, and are sorted by time. An event whose time is past the
-	/// end of the block happens in the last frame instead. Returns `false`, and drops the event,
-	/// if too many events are waiting.
+	/// Events are inserted in sorted order (by time, then sequence) to avoid O(n log n) sort.
+	/// An event whose time is past the end of the block happens in the last frame instead.
+	/// Returns `false`, and drops the event, if too many events are waiting.
 	pub fn push_event(&mut self, event: Event) -> bool {
 		if self.pending.len() >= PENDING_EVENTS {
 			self.dropped_events += 1;
 			return false;
 		}
 
-		self.pending.push(Pending {
-			event,
-			seq: self.seq,
-		});
+		let new_seq = self.seq;
 		self.seq = self.seq.wrapping_add(1);
+
+		// Insert in sorted order (insertion sort) - real-time safe
+		// We maintain the invariant that self.pending is always sorted
+		let insert_idx = self
+			.pending
+			.iter()
+			.position(|p| (p.event.time(), p.seq) > (event.time(), new_seq))
+			.unwrap_or(self.pending.len());
+
+		self.pending.insert(insert_idx, Pending { event, seq: new_seq });
 		true
 	}
 
@@ -251,10 +258,7 @@ impl AudioThread {
 			return ProcessStatus::Processed;
 		}
 
-		// the arrival order is the tie breaker, so this doesn't have to be a stable sort
-		self.pending
-			.sort_unstable_by_key(|pending| (pending.event.time(), pending.seq));
-
+		// Events are already sorted by push_event (insertion sort) - no allocation!
 		let total = audio.len();
 		let mut next_event = 0;
 		let mut status = ProcessStatus::Processed;

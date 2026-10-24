@@ -6,7 +6,7 @@ use clap_host::events::{EventFlags, Match};
 
 pub type VoiceId = (ClipId, MidiNoteId, MidiKey);
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MidiClip {
 	pub id: ClipId,
 	pub pattern: MidiPatternId,

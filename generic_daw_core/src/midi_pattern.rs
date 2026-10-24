@@ -127,7 +127,9 @@ impl MidiPattern {
 
 	pub fn apply(&mut self, action: MidiPatternAction) {
 		match action {
-			MidiPatternAction::Add(note) => _ = self.notes.insert(note.id, note),
+			MidiPatternAction::Add(note) | MidiPatternAction::Replace(note) => {
+				_ = self.notes.insert(note.id, note);
+			}
 			MidiPatternAction::Remove(id) => _ = self.notes.remove(&id),
 			MidiPatternAction::ChangeKey(id, key) => self.notes.get_mut(&id).unwrap().key = key,
 			MidiPatternAction::ChangeVelocity(id, velocity) => {

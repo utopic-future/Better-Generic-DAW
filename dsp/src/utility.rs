@@ -1,5 +1,8 @@
 use std::f32::consts::{FRAC_PI_4, SQRT_2};
 
+#[cfg(feature = "simd")]
+use crate::simd;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PanMode {
 	Stereo(f32),
@@ -23,6 +26,11 @@ impl Utility {
 		match self.pan {
 			PanMode::Stereo(pan) => {
 				let (l, r) = split(pan, self.volume * SQRT_2);
+				#[cfg(feature = "simd")]
+				unsafe {
+					simd::utility_process_stereo_sse2(audio, l, r);
+				}
+				#[cfg(not(feature = "simd"))]
 				for [ls, rs] in audio {
 					*ls *= l;
 					*rs *= r;
@@ -31,6 +39,11 @@ impl Utility {
 			PanMode::SplitStereo(l, r) => {
 				let (ll, lr) = split(l, self.volume);
 				let (rl, rr) = split(r, self.volume);
+				#[cfg(feature = "simd")]
+				unsafe {
+					simd::utility_process_split_stereo_sse2(audio, ll, lr, rl, rr);
+				}
+				#[cfg(not(feature = "simd"))]
 				for [ls, rs] in audio {
 					let ols = *ls;
 					*ls = *ls * ll + *rs * rl;

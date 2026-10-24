@@ -1,7 +1,7 @@
 use crate::{ClipId, SampleId, Transition, audio_thread::State, time::OffsetBeatSpan};
 use dsp::resample_cubic;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AudioClip {
 	pub id: ClipId,
 	pub sample: SampleId,
@@ -44,7 +44,6 @@ impl AudioClip {
 
 		let resample_ratio = sample.resample_ratio(&state.transport);
 		let offset = (self.position.offset() / resample_ratio).to_frames(&state.transport);
-		let read_len = sample.samples.len() - offset;
 
 		let resample_ratio = self.stretch / resample_ratio;
 		let read_start = if resample_ratio.is_sign_positive() {
@@ -56,36 +55,26 @@ impl AudioClip {
 		let fade_start = self.fade_start.len.to_frames(&state.transport);
 		let fade_end = self.fade_end.len.to_frames(&state.transport);
 
-		let mut iter = resample_cubic(
-			&sample.samples[read_start..][..read_len],
-			resample_ratio,
-			play_pos,
-		)
-		.take(len - play_pos)
-		.zip(&mut audio[write_start..])
-		.zip(play_pos..);
+		let volume = self.volume;
+		let samples = &sample.samples[read_start..];
+		let _sample_len = samples.len();
 
-		iter.by_ref()
-			.take(fade_start.saturating_sub(play_pos))
-			.for_each(|(([l, r], audio), pos)| {
-				let mix = self.fade_start.transition(pos as f32 / fade_start as f32);
-				audio[0] += l * self.volume * mix;
-				audio[1] += r * self.volume * mix;
-			});
+		// Stream directly from resampler into output - no intermediate Vec allocation
+		let mut resample_iter = resample_cubic(samples, resample_ratio, play_pos);
+		
+		for (i, frame) in audio[write_start..].iter_mut().enumerate().take(len - play_pos) {
+			let Some([l, r]) = resample_iter.next() else { break };
 
-		iter.by_ref()
-			.take((len - fade_end).saturating_sub(play_pos))
-			.for_each(|(([l, r], audio), _)| {
-				audio[0] += l * self.volume;
-				audio[1] += r * self.volume;
-			});
+			let mix = if i < fade_start {
+				self.fade_start.transition(i as f32 / fade_start as f32)
+			} else if i >= len - fade_end {
+				self.fade_end.transition((len - i) as f32 / fade_end as f32)
+			} else {
+				1.0
+			};
 
-		iter.by_ref().for_each(|(([l, r], audio), pos)| {
-			let mix = self
-				.fade_end
-				.transition((len - pos) as f32 / fade_end as f32);
-			audio[0] += l * self.volume * mix;
-			audio[1] += r * self.volume * mix;
-		});
+			frame[0] += l * volume * mix;
+			frame[1] += r * volume * mix;
+		}
 	}
 }

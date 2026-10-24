@@ -1,5 +1,6 @@
 use crate::{
 	daw::{CONFIG_DIR, DATA_DIR},
+	shortcuts::Overrides,
 	theme::Theme,
 };
 use generic_daw_core::{DeviceId, HostId};
@@ -16,6 +17,10 @@ use std::{
 pub static CONFIG_PATH: LazyLock<Arc<Path>> =
 	LazyLock::new(|| CONFIG_DIR.join("config.toml").into());
 
+/// Where what we remember about the plugins on this computer is written.
+pub static PLUGIN_MEMORY_PATH: LazyLock<Arc<Path>> =
+	LazyLock::new(|| CONFIG_DIR.join("plugin_memory.toml").into());
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct Config {
@@ -27,6 +32,8 @@ pub struct Config {
 	pub open_last_project: bool,
 	pub scale_factor: f32,
 	pub theme: Theme,
+	/// The keyboard shortcuts the user changed.
+	pub shortcuts: Overrides,
 }
 
 impl Default for Config {
@@ -40,6 +47,7 @@ impl Default for Config {
 			open_last_project: false,
 			scale_factor: 1.0,
 			theme: Theme::CatppuccinFrappe,
+			shortcuts: Overrides::default(),
 		}
 	}
 }
@@ -210,6 +218,68 @@ impl Config {
 
 	pub fn write(&self) {
 		write(&*CONFIG_PATH, toml::to_string(self).unwrap()).unwrap();
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use crate::shortcuts::{Action, Chord, Key};
+
+	use super::*;
+
+	#[test]
+	fn the_config_can_be_written_and_read() {
+		let mut config = Config::default();
+
+		config.shortcuts.set(
+			Action::SaveFile,
+			vec![Chord::commanded(Key::Character('k'))],
+		);
+		config.shortcuts.set(Action::Delete, Vec::new());
+
+		let text = toml::to_string(&config).unwrap();
+		let read = toml::from_str::<Config>(&text).unwrap();
+
+		assert_eq!(read, config);
+	}
+
+	#[test]
+	fn a_config_without_shortcuts_is_read() {
+		let read = toml::from_str::<Config>("scale_factor = 1.0").unwrap();
+
+		assert_eq!(read.shortcuts, Overrides::default());
+	}
+
+	#[test]
+	fn the_shortcuts_are_read_from_the_config() {
+		let text = r#"
+scale_factor = 1.0
+
+[[shortcuts.bindings]]
+action = "SaveFile"
+chords = ["Ctrl+K"]
+
+[[shortcuts.bindings]]
+action = "Delete"
+chords = []
+"#;
+
+		let read = toml::from_str::<Config>(text).unwrap();
+
+		assert_eq!(read.shortcuts.bindings.len(), 2);
+
+		assert_eq!(
+			read.shortcuts.bindings[0].action,
+			Action::SaveFile,
+		);
+
+		assert_eq!(
+			read.shortcuts.bindings[0].chords,
+			vec![Chord::commanded(Key::Character('k'))],
+		);
+
+		assert_eq!(read.shortcuts.bindings[1].action, Action::Delete);
+		assert!(read.shortcuts.bindings[1].chords.is_empty());
 	}
 }
 

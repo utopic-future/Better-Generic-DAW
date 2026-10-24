@@ -8,7 +8,6 @@ use audio_graph::{Injector, NodeId};
 pub enum Node {
 	Channel(Channel),
 	Track(Track),
-	None,
 }
 
 impl NodeImpl for Node {
@@ -28,7 +27,6 @@ impl NodeImpl for Node {
 		match self {
 			Self::Channel(node) => node.process(state, audio, events, scratch, injector),
 			Self::Track(node) => node.process(state, audio, events, scratch, injector),
-			Self::None => unreachable!(),
 		}
 	}
 
@@ -40,7 +38,6 @@ impl NodeImpl for Node {
 		match self {
 			Self::Channel(node) => node.id(),
 			Self::Track(node) => node.id(),
-			Self::None => unreachable!(),
 		}
 	}
 
@@ -48,29 +45,29 @@ impl NodeImpl for Node {
 		match self {
 			Self::Channel(node) => node.reset(),
 			Self::Track(node) => node.reset(),
-			Self::None => unreachable!(),
 		}
 	}
 }
 
 impl Node {
-	pub fn apply(&mut self, action: NodeAction, state: &State, updates: &mut Vec<Update>) {
+	pub fn apply(&mut self, action: NodeAction, state: &mut State, updates: &mut Vec<Update>) {
 		match self {
 			Self::Channel(node) => node.apply(action),
 			Self::Track(node) => node.apply(action, state, updates),
-			Self::None => unreachable!(),
 		}
 	}
 
 	pub fn toggle_kind(&mut self, transport: &Transport) {
-		let this = std::mem::replace(self, Self::None);
+		let this = std::mem::replace(
+			self,
+			Self::Channel(Channel::new(Channels::base(transport.output_channels.get()))),
+		);
 		*self = match this {
 			Self::Channel(node) => Self::Track(Track::from_channel(
 				Channels::base(transport.input_channels),
 				node,
 			)),
 			Self::Track(node) => Self::Channel(Track::into_channel(node)),
-			Self::None => unreachable!(),
 		};
 	}
 
@@ -78,7 +75,6 @@ impl Node {
 		match self {
 			Self::Channel(node) => node.collect_updates(updates),
 			Self::Track(node) => node.collect_updates(updates),
-			Self::None => unreachable!(),
 		}
 	}
 
@@ -87,7 +83,6 @@ impl Node {
 		match self {
 			Self::Channel(node) => node.output(),
 			Self::Track(node) => node.output(),
-			Self::None => unreachable!(),
 		}
 	}
 
@@ -95,7 +90,6 @@ impl Node {
 		match self {
 			Self::Channel(node) => node.restart_all_plugins(),
 			Self::Track(node) => node.restart_all_plugins(),
-			Self::None => unreachable!(),
 		}
 	}
 }

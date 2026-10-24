@@ -10,34 +10,85 @@ use iced_widget::{
 	},
 };
 
+/// Where a menu is attached to.
+#[derive(Clone, Copy, Debug)]
+pub enum Anchor {
+	/// The top left corner of the menu is at this point.
+	TopLeft(Point),
+	/// The top right corner of the menu is at this point.
+	///
+	/// The menu opens to the left of the point when there isn't room to the right.
+	TopRight(Point),
+}
+
+impl Anchor {
+	/// The point the menu is attached to.
+	fn point(self) -> Point {
+		match self {
+			Self::TopLeft(point) | Self::TopRight(point) => point,
+		}
+	}
+}
+
+/// A menu that floats above the rest of the interface.
 pub struct MenuOverlay<'a, 'b, Message> {
+	/// The contents of the menu.
 	pub content: &'b mut Element<'a, Message, Theme, Renderer>,
+	/// The tree of the contents of the menu.
 	pub tree: &'b mut Tree,
+	/// Where the menu is, if it is open.
 	pub state: &'b mut Option<Point>,
-	pub bounds: Rectangle,
+	/// Where the menu is attached to.
+	pub anchor: Anchor,
+	/// The bounds of the thing that opened the menu.
+	///
+	/// The menu closes when the pointer leaves both the menu and this, which is
+	/// how a submenu gets out of the way when the pointer moves to another item.
+	pub parent: Option<Rectangle>,
 }
 
 impl<Message> overlay::Overlay<Message, Theme, Renderer> for MenuOverlay<'_, '_, Message> {
 	fn layout(&mut self, renderer: &Renderer, bounds: Size) -> Node {
-		let size = Size::new(self.bounds.x, self.bounds.y);
-		let mut layout = self
-			.content
-			.as_widget_mut()
-			.layout(
-				self.tree,
-				renderer,
-				&Limits::new(Size::ZERO, (size + self.bounds.size()).max(bounds - size)),
-			)
-			.move_to(self.bounds.position());
+		let anchor = self.anchor.point();
 
+		// the menu can be as big as the biggest of the two sides of the anchor
+		let max_width = anchor.x.max(bounds.width - anchor.x);
+		let max_height = anchor.y.max(bounds.height - anchor.y);
+
+		let mut layout = self.content.as_widget_mut().layout(
+			self.tree,
+			renderer,
+			&Limits::new(Size::ZERO, Size::new(max_width, max_height)),
+		);
+
+		let width = layout.bounds().width;
+
+		let x = match self.anchor {
+			Anchor::TopLeft(point) => point.x,
+			Anchor::TopRight(point) => {
+				// open to the left of the point when there isn't room to the right
+				if point.x + width > bounds.width && point.x - width >= 0.0 {
+					point.x - width
+				} else {
+					point.x
+				}
+			}
+		};
+
+		layout = layout.move_to(Point::new(x, anchor.y));
+
+		// keep the menu on the screen
 		if bounds.width < layout.bounds().x + layout.bounds().width {
-			layout.translate_mut(Vector::new(self.bounds.width - layout.bounds().width, 0.0));
+			layout.translate_mut(Vector::new(
+				bounds.width - (layout.bounds().x + layout.bounds().width),
+				0.0,
+			));
 		}
 
 		if bounds.height < layout.bounds().y + layout.bounds().height {
 			layout.translate_mut(Vector::new(
 				0.0,
-				self.bounds.height - layout.bounds().height,
+				bounds.height - (layout.bounds().y + layout.bounds().height),
 			));
 		}
 
@@ -107,6 +158,17 @@ impl<Message> overlay::Overlay<Message, Theme, Renderer> for MenuOverlay<'_, '_,
 			{
 				*self.state = None;
 				shell.request_redraw();
+			}
+			Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+				// a submenu gets out of the way when the pointer moves to another item
+				if let Some(parent) = self.parent
+					&& let Some(position) = cursor.position()
+					&& !layout.bounds().contains(position)
+					&& !parent.contains(position)
+				{
+					*self.state = None;
+					shell.request_redraw();
+				}
 			}
 			Event::Mouse(mouse::Event::WheelScrolled { .. }) => {
 				shell.capture_event();

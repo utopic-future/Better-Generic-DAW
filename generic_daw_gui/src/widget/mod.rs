@@ -5,7 +5,7 @@ use generic_daw_core::{
 use iced::Vector;
 use std::ops::{Add, Neg};
 
-mod clip;
+pub mod clip;
 mod note;
 mod piano;
 pub mod piano_roll;

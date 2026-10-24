@@ -4,6 +4,8 @@ mod audio_graph;
 mod entry;
 mod event_impl;
 mod node_impl;
+#[cfg(feature = "simd")]
+pub mod simd;
 
 unique_id!(NodeId);
 

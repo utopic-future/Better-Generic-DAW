@@ -72,7 +72,7 @@ impl Display for MidiKey {
 	}
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MidiNote {
 	pub id: MidiNoteId,
 	pub key: MidiKey,

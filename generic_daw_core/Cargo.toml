@@ -7,11 +7,15 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+simd = ["audio_graph/simd", "dsp/simd"]
+
 [dependencies]
 audio_graph.workspace = true
 clap_host.workspace = true
 dsp.workspace = true
 utils.workspace = true
+vst2_host.workspace = true
 vst3_host.workspace = true
 
 cpal = { version = "0.18.2", features = ["asio", "pipewire"] }

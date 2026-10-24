@@ -6,7 +6,11 @@ use audio_graph::Injector;
 use clap_host::{AudioThread as ClapAudioThread, ClapId, RenderMode, events::EventFlags};
 use log::warn;
 use rtrb::{Consumer, Producer, RingBuffer};
-use std::collections::HashMap;
+use std::{
+	collections::HashMap,
+	sync::atomic::AtomicBool,
+};
+use vst2_host::AudioThread as Vst2AudioThread;
 use vst3_host::{AudioThread as Vst3AudioThread, RestartFlags};
 
 #[derive(Debug)]
@@ -20,6 +24,7 @@ pub enum AudioThreadMessage {
 #[derive(Debug)]
 pub enum AudioBackend {
 	Clap(ClapAudioThread),
+	Vst2(Vst2AudioThread),
 	Vst3(Vst3AudioThread),
 }
 
@@ -30,6 +35,8 @@ pub struct AudioProcessor {
 	/// these are normalized, so `0.0..=1.0`.
 	updates: HashMap<ClapId, f32>,
 	producer: Producer<(ClapId, f32)>,
+	/// Atomic flag for non-blocking restart - set by audio thread, cleared by main thread
+	pub restart_in_progress: AtomicBool,
 }
 
 impl AudioProcessor {
@@ -41,6 +48,24 @@ impl AudioProcessor {
 
 		Self::with_backend(
 			AudioBackend::Clap(clap),
+			param_count,
+			sample_rate,
+			max_frames,
+		)
+	}
+
+	/// `param_count` is the number of parameters the plugin has, to size the queue of parameter
+	/// changes that go to the UI.
+	#[must_use]
+	pub fn create_vst2(
+		vst2: Vst2AudioThread,
+		param_count: usize,
+	) -> (Self, Consumer<(ClapId, f32)>) {
+		let sample_rate = vst2.config().sample_rate as usize;
+		let max_frames = vst2.config().max_frames as usize;
+
+		Self::with_backend(
+			AudioBackend::Vst2(vst2),
 			param_count,
 			sample_rate,
 			max_frames,
@@ -72,13 +97,14 @@ impl AudioProcessor {
 		max_frames: usize,
 	) -> (Self, Consumer<(ClapId, f32)>) {
 		let (producer, consumer) =
-			RingBuffer::new((param_count * sample_rate).div_ceil(max_frames));
+			RingBuffer::new((param_count * sample_rate).div_ceil(max_frames).max(64));
 
 		(
 			Self {
 				updates: HashMap::with_capacity(param_count),
 				backend,
 				producer,
+				restart_in_progress: AtomicBool::new(false),
 			},
 			consumer,
 		)
@@ -97,13 +123,14 @@ impl AudioProcessor {
 	pub fn into_clap(self) -> ClapAudioThread {
 		match self.backend {
 			AudioBackend::Clap(clap) => clap,
-			AudioBackend::Vst3(_) => panic!("not a CLAP plugin"),
+			AudioBackend::Vst2(_) | AudioBackend::Vst3(_) => panic!("not a CLAP plugin"),
 		}
 	}
 
 	pub(crate) fn sample_rate(&self) -> u32 {
 		match &self.backend {
 			AudioBackend::Clap(clap) => clap.config().sample_rate as u32,
+			AudioBackend::Vst2(vst2) => vst2.config().sample_rate as u32,
 			AudioBackend::Vst3(vst3) => vst3.config().sample_rate as u32,
 		}
 	}
@@ -111,6 +138,7 @@ impl AudioProcessor {
 	pub(crate) fn max_frames(&self) -> u32 {
 		match &self.backend {
 			AudioBackend::Clap(clap) => clap.config().max_frames_count,
+			AudioBackend::Vst2(vst2) => vst2.config().max_frames,
 			AudioBackend::Vst3(vst3) => vst3.config().max_frames,
 		}
 	}
@@ -119,9 +147,44 @@ impl AudioProcessor {
 	pub(crate) fn needs_restart(&self) -> bool {
 		match &self.backend {
 			AudioBackend::Clap(clap) => clap.needs_restart(),
+			// a VST2 plugin can't ask for a restart
+			AudioBackend::Vst2(_) => false,
 			AudioBackend::Vst3(vst3) => vst3.restart_flags().needs_restart(),
 		}
 	}
+}
+
+/// Processes a block with a VST2 plugin, and returns the plugin's latency.
+///
+/// Parameter changes the plugin makes on its own are collected in `updates`, and its other events
+/// replace the ones in `events`, for whatever comes after it.
+pub fn process_vst2(
+	vst2: &mut Vst2AudioThread,
+	updates: &mut HashMap<ClapId, f32>,
+	transport: &Transport,
+	audio: &mut [[f32; 2]],
+	events: &mut Vec<Event>,
+	mix: f32,
+) -> usize {
+	for event in events.drain(..) {
+		vst2.push_event(event.to_vst2());
+	}
+
+	vst2.process(audio, Some(&transport.as_vst2()), mix);
+
+	for event in vst2.drain_output_events() {
+		match Event::from_vst2(event) {
+			Some(Event::ParamValue {
+				param_id, value, ..
+			}) => {
+				updates.insert(param_id, value);
+			}
+			Some(event) => events.push(event),
+			None => {}
+		}
+	}
+
+	vst2.latency()
 }
 
 /// Processes a block with a VST3 plugin, and returns the plugin's latency.
@@ -279,6 +342,14 @@ impl PluginSlot {
 				injector,
 				self.mix,
 			),
+			AudioBackend::Vst2(vst2) => process_vst2(
+				vst2,
+				&mut processor.updates,
+				&state.transport,
+				audio,
+				events,
+				self.mix,
+			),
 			AudioBackend::Vst3(vst3) => process_vst3(
 				vst3,
 				&mut processor.updates,
@@ -310,6 +381,7 @@ impl PluginSlot {
 		if let Some(plugin) = self.plugin.as_mut().and_then(|slot| slot.as_mut()) {
 			match &mut plugin.processor.backend {
 				AudioBackend::Clap(clap) => clap.reset(),
+				AudioBackend::Vst2(vst2) => vst2.reset(),
 				AudioBackend::Vst3(vst3) => vst3.reset(),
 			}
 		}
@@ -332,6 +404,9 @@ impl PluginSlot {
 
 			match &mut plugin.processor.backend {
 				AudioBackend::Clap(clap) => clap.push(event),
+				AudioBackend::Vst2(vst2) => {
+					vst2.push_event(event.to_vst2());
+				}
 				AudioBackend::Vst3(vst3) => {
 					vst3.push_event(event.to_vst3());
 				}

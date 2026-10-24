@@ -1,0 +1,16 @@
+# A tiny VST2 plugin used only as a test fixture. It has one parameter, and it makes the
+# signal quieter by it.
+[package]
+name = "vst2_gain"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+vst2_host = { path = ".." }
+
+# Not part of the main workspace.
+[workspace]

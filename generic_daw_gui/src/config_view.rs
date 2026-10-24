@@ -4,6 +4,7 @@ use crate::{
 	config::Config,
 	daw,
 	icons::{grip_vertical, plus, rotate_ccw, save, x},
+	shortcuts::{Action as ShortcutAction, Chord, Context, Manager, Overrides},
 	stylefns::{
 		button_with_radius, container_with_radius, menu_style, pick_list_with_radius,
 		scrollable_style, scrollable_with_container, sweeten_column_style,
@@ -19,7 +20,6 @@ use generic_daw_core::{
 use iced::{
 	Center, Element, Fill, Font, Task, border,
 	font::Weight,
-	keyboard,
 	mouse::Interaction,
 	padding,
 	widget::{
@@ -74,6 +74,16 @@ pub enum Message {
 	ToggledOpenLastProject,
 	ChangedTheme(Theme),
 	ChangedScaleFactor(f32),
+	/// Starts listening for the key of a shortcut, or stops listening.
+	RecordShortcut(ShortcutAction),
+	/// The key that was pressed while the user was recording a shortcut.
+	ShortcutPressed(Chord),
+	/// Puts the shortcut of an action back to what it was by default.
+	ResetShortcut(ShortcutAction),
+	/// Takes the shortcut of an action away.
+	UnbindShortcut(ShortcutAction),
+	/// Puts all the shortcuts back to what they were by default.
+	ResetShortcuts,
 	WriteConfig,
 	ResetConfigToLast,
 }
@@ -81,6 +91,10 @@ pub enum Message {
 #[derive(Debug)]
 pub struct ConfigView {
 	config: Config,
+	/// The shortcuts that are in effect, with the changes the user made.
+	shortcuts: Manager,
+	/// The action the user is recording a shortcut for.
+	recording: Option<ShortcutAction>,
 	hosts: Box<[HostId]>,
 	input_devices: HashMap<HostId, Vec<DeviceId>>,
 	input_device_info: HashMap<DeviceId, DeviceDescription>,
@@ -145,6 +159,8 @@ impl ConfigView {
 
 		Self {
 			config: loaded_config.clone(),
+			shortcuts: Manager::new(&loaded_config.shortcuts),
+			recording: None,
 			hosts,
 			input_devices,
 			input_device_info,
@@ -224,12 +240,36 @@ impl ConfigView {
 			Message::ChangedScaleFactor(scale_factor) => {
 				self.config.scale_factor = scale_factor;
 			}
+			Message::RecordShortcut(action) => {
+				self.recording = if self.recording == Some(action) {
+					None
+				} else {
+					Some(action)
+				};
+			}
+			Message::ShortcutPressed(chord) => self.record(chord),
+			Message::ResetShortcut(action) => {
+				self.config.shortcuts.reset(action);
+				self.shortcuts = Manager::new(&self.config.shortcuts);
+			}
+			Message::UnbindShortcut(action) => {
+				self.config.shortcuts.set(action, Vec::new());
+				self.shortcuts = Manager::new(&self.config.shortcuts);
+			}
+			Message::ResetShortcuts => {
+				self.config.shortcuts = Overrides::default();
+				self.shortcuts = Manager::new(&self.config.shortcuts);
+			}
 			Message::WriteConfig => {
 				return Action::instruction(daw::Instruction::Message(daw::Message::LoadConfig(
 					self.config.clone().into(),
 				)));
 			}
-			Message::ResetConfigToLast => self.config = loaded_config.clone(),
+			Message::ResetConfigToLast => {
+				self.config = loaded_config.clone();
+				self.shortcuts = Manager::new(&self.config.shortcuts);
+				self.recording = None;
+			}
 		}
 
 		Action::none()
@@ -642,6 +682,24 @@ impl ConfigView {
 				]
 				.align_y(Center),
 				rule::horizontal(1),
+				text("Shortcuts")
+					.size(LINE_HEIGHT)
+					.line_height(1.0)
+					.font(Font::DEFAULT.weight(Weight::Bold)),
+				row![
+					"Click a shortcut to change it.",
+					space::horizontal(),
+					button(rotate_ccw())
+						.style(button_with_radius(button::primary, 5))
+						.padding(5)
+						.on_press_maybe(
+							(!self.config.shortcuts.bindings.is_empty())
+								.then_some(Message::ResetShortcuts)
+						)
+				]
+				.align_y(Center),
+				self.shortcuts_view(),
+				rule::horizontal(1),
 				row![
 					iced(TEXT_HEIGHT),
 					space::horizontal(),
@@ -672,23 +730,90 @@ impl ConfigView {
 		.into()
 	}
 
-	pub fn keybinds(
-		key: &keyboard::Key,
-		modifiers: keyboard::Modifiers,
-		repeat: bool,
-	) -> Option<daw::Message> {
-		match (
-			modifiers.command(),
-			modifiers.shift(),
-			modifiers.alt(),
-			repeat,
-		) {
-			(false, false, false, false) => match key.as_ref() {
-				keyboard::Key::Named(keyboard::key::Named::Escape) => {
-					Some(daw::Message::ToggleConfigView)
-				}
-				_ => None,
-			},
+	/// The list of the shortcuts, and how to change them.
+	fn shortcuts_view(&self) -> Element<'_, Message> {
+		column(Context::ALL.into_iter().map(|context| {
+			column![
+				text(context.label())
+					.size(TEXT_HEIGHT)
+					.line_height(1.0)
+					.font(Font::DEFAULT.weight(Weight::Bold)),
+				column(
+					ShortcutAction::ALL
+						.into_iter()
+						.filter(|action| action.context() == context)
+						.map(|action| self.shortcut_row(action)),
+				)
+				.spacing(5)
+			]
+			.spacing(5)
+			.into()
+		}))
+		.spacing(10)
+		.into()
+	}
+
+	/// The shortcut of an action, and the buttons to change it.
+	fn shortcut_row(&self, action: ShortcutAction) -> Element<'_, Message> {
+		let chords = self.shortcuts.chords(action);
+
+		let label = if self.recording == Some(action) {
+			"Press a key...".to_owned()
+		} else if chords.is_empty() {
+			"Not bound".to_owned()
+		} else {
+			chords
+				.iter()
+				.map(ToString::to_string)
+				.collect::<Vec<_>>()
+				.join(", ")
+		};
+
+		row![
+			text(action.label()).width(Fill),
+			button(text(label).font(Font::MONOSPACE))
+				.style(button_with_radius(button::primary, 5))
+				.padding(5)
+				.on_press(Message::RecordShortcut(action)),
+			button(x())
+				.style(button_with_radius(button::danger, 5))
+				.padding(0)
+				.on_press_maybe(
+					(!chords.is_empty()).then_some(Message::UnbindShortcut(action))
+				),
+			button(rotate_ccw())
+				.style(button_with_radius(button::primary, 5))
+				.padding(0)
+				.on_press_maybe(
+					self.config
+						.shortcuts
+						.is_customized(action)
+						.then_some(Message::ResetShortcut(action))
+				)
+		]
+		.spacing(5)
+		.align_y(Center)
+		.into()
+	}
+
+	/// Whether the user is recording a shortcut.
+	#[must_use]
+	pub fn is_recording(&self) -> bool {
+		self.recording.is_some()
+	}
+
+	/// Records the key the user pressed as the shortcut of the action.
+	pub fn record(&mut self, chord: Chord) {
+		if let Some(action) = self.recording.take() {
+			self.config.shortcuts.set(action, vec![chord]);
+			self.shortcuts = Manager::new(&self.config.shortcuts);
+		}
+	}
+
+	/// The message of a shortcut that applies to the settings.
+	pub fn keybinds(action: ShortcutAction) -> Option<daw::Message> {
+		match action {
+			ShortcutAction::CloseSettings => Some(daw::Message::ToggleConfigView),
 			_ => None,
 		}
 	}

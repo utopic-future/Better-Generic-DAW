@@ -22,8 +22,8 @@ mod vst3_tests;
 pub use audio_clip::AudioClip;
 pub use audio_graph::{NodeId, NodeImpl};
 pub use audio_thread::{
-	AudioPreview, AudioThread, Batch, Message, MidiAction, MidiPatternAction, NodeAction,
-	TimedMidiAction, Transport, Update, Version,
+	AudioPreview, AudioThread, Batch, Message, MidiAction, MidiPatternAction, MidiPreview,
+	NodeAction, TimedMidiAction, Transport, Update, Version,
 };
 pub use bpm_tapper::BpmTapper;
 pub use channel::Channel;
@@ -47,6 +47,7 @@ pub use stream::{
 pub use symphonia::core::io::MediaSource;
 pub use track::Track;
 pub use transition::{Point, Transition};
+pub use vst2_host;
 pub use vst3_host;
 
 pub type ThreadPool = utils::NoDebug<audio_graph::ThreadPool<Node>>;

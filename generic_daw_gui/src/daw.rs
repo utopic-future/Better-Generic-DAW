@@ -1,21 +1,25 @@
 use crate::{
 	arrangement_view::{self, Arrangement, ArrangementView, Feedback},
 	clap_host::{self, ClapHost, PluginId},
-	components::{menu_entry, number_input},
+	components::{MenuItem, menu_entry, menu_width, number_input},
 	config::Config,
 	config_view::{self, ConfigView},
 	file_tree::{self, FileKind, FileTree},
 	icons::{
-		arrow_big_right, chart_no_axes_gantt, cpu, gavel, keyboard_music, magnet, menu, metronome,
-		panel_bottom_dashed, pause, play, plus, sliders_vertical, square,
+		arrow_big_right, chart_no_axes_gantt, cpu, file, folder_open, gavel, history, keyboard_music,
+		magnet, menu as menu_icon, metronome, midi_port, panel_bottom_dashed, pause, play, plus,
+		save, settings, sliders_vertical, square,
 	},
 	plugin_descriptor::PluginDescriptor,
+	plugin_memory::{PluginEntry, PluginMemory},
 	plugin_picker::{self, PluginPicker},
+	shortcuts::{Action, Chord, Context, Manager},
 	state::{DEFAULT_SPLIT_HEIGHT, DEFAULT_SPLIT_WIDTH, MIN_SPLIT_HEIGHT, MIN_SPLIT_WIDTH, State},
 	stylefns::{
 		button_with_radius, container_with_radius, progress_bar_with_radius, selectable_box,
 		split_style, weak_bordered_box, weaker_bordered_box, weakest_bordered_box,
 	},
+	vst2_host::{self, Vst2Host},
 	vst3_host::{self, Vst3Host},
 	widget::{ALPHA_2_3, LINE_HEIGHT},
 };
@@ -41,7 +45,7 @@ use iced::{
 	window,
 };
 use iced_split::{Strategy, horizontal_split, vertical_split};
-use log::{info, trace, warn};
+use log::{error, info, trace, warn};
 use rfd::AsyncFileDialog;
 use smol::{Timer, unblock};
 use std::{
@@ -124,6 +128,17 @@ pub enum Instruction {
 	PluginCopyState(PluginId, PluginId),
 	PluginActivate(PluginId, clap_host::AudioThread),
 	PluginRestart(PluginId, Option<clap_host::AudioThread>),
+	Vst2PluginAdd(
+		PluginId,
+		generic_daw_core::vst2_host::Plugin,
+		Receiver<generic_daw_core::vst2_host::MainThreadMessage>,
+	),
+	/// The audio thread, and how many parameters the plugin has.
+	Vst2PluginActivate(PluginId, generic_daw_core::vst2_host::AudioThread, usize),
+	Vst2PluginRestart(
+		PluginId,
+		Option<(generic_daw_core::vst2_host::AudioThread, usize)>,
+	),
 	Vst3PluginAdd(
 		PluginId,
 		generic_daw_core::vst3_host::Plugin,
@@ -142,6 +157,7 @@ pub enum Instruction {
 pub enum Message {
 	Arrangement(Project, arrangement_view::Message),
 	ClapHost(clap_host::Message),
+	Vst2Host(vst2_host::Message),
 	Vst3Host(vst3_host::Message),
 	FileTree(file_tree::Message),
 	PluginPicker(plugin_picker::Message),
@@ -197,8 +213,15 @@ pub enum Message {
 	ToggleConfigView,
 	LoadConfig(Box<Config>),
 
+	/// Puts the state of a plugin in the clipboard.
+	PluginCopyState(PluginId),
+	/// Puts the state in the clipboard into a plugin.
+	PluginPasteState(PluginId),
+
 	RescanDevices,
 	RescanPlugins,
+	FullRescanPlugins,
+	GenerateMeshes,
 
 	FileHovered,
 	FileDropped(Arc<Path>),
@@ -206,6 +229,8 @@ pub enum Message {
 
 	TogglePlayback,
 	Stop,
+	Undo,
+	Redo,
 	ToggleShowSeconds,
 	ToggleMetronome,
 	ToggleAutoscroll,
@@ -233,6 +258,9 @@ pub enum Message {
 	OnFileTreeDragEnd,
 	OnFileTreeDoubleClick,
 	OnBottomPaneDoubleClick,
+
+	/// A key was pressed, and it might be a shortcut.
+	Shortcut(Chord, bool),
 }
 
 const _: () = assert!(size_of::<Message>() == 64);
@@ -310,11 +338,18 @@ pub struct Daw {
 
 	arrangement_view: ArrangementView,
 	clap_host: ClapHost,
+	vst2_host: Vst2Host,
 	vst3_host: Vst3Host,
 	file_tree: FileTree,
 	plugin_picker: Option<PluginPicker>,
 	config_view: Option<ConfigView>,
 	recovering: bool,
+
+	/// The keyboard shortcuts that are in effect.
+	shortcuts: Manager,
+
+	/// The state of the plugin that was copied, if there is one.
+	plugin_state: Option<Box<[u8]>>,
 
 	plugins: plugin_picker::State,
 	bpm_tapper: BpmTapper,
@@ -350,10 +385,10 @@ impl Daw {
 		let window = window.discard();
 
 		let config = Config::read();
-		let state = State::read();
+		let mut state = State::read();
 
 		let (sender, receiver) = oneshot::channel();
-		let (streams, input_channels, output_channels, sample_rate, frames) = build_streams(
+		let result = build_streams(
 			&config.audio.devices.as_core(),
 			config.midi.input.as_deref(),
 			config.midi.output.as_deref(),
@@ -361,6 +396,13 @@ impl Daw {
 			config.audio.buffer_size,
 			PullSlot::Empty(receiver),
 		);
+		let (streams, input_channels, output_channels, sample_rate, frames) = match result {
+			Ok(v) => v,
+			Err(e) => {
+				error!("Failed to build audio streams: {e}");
+				std::process::exit(1);
+			}
+		};
 
 		let project = Project::unique();
 		let (mut arrangement, processor, batches) =
@@ -371,10 +413,14 @@ impl Daw {
 
 		let arrangement_view = ArrangementView::new(arrangement, &state, None);
 		let clap_host = ClapHost::new(main_window_id);
+		let vst2_host = Vst2Host::new();
 		let vst3_host = Vst3Host::new();
 		let file_tree = FileTree::new(&config.sample_paths);
 		let recovering = state.recovery_project.is_some() || state.crash_log.is_some();
 		let bottom_pane = state.bottom_pane_split_at != 0.0;
+
+		let shortcuts = Manager::new(&config.shortcuts);
+		state.shortcuts = shortcuts.clone();
 
 		let mut this = Self {
 			config,
@@ -383,13 +429,17 @@ impl Daw {
 
 			arrangement_view,
 			clap_host,
+			vst2_host,
 			vst3_host,
 			file_tree,
 			config_view: None,
 			plugin_picker: None,
 			recovering: true,
 
-			plugins: plugin_picker::State::default(),
+			shortcuts,
+			plugin_state: None,
+
+			plugins: plugin_picker::State::read(),
 			bpm_tapper: BpmTapper::default(),
 
 			progress: None,
@@ -439,13 +489,29 @@ impl Daw {
 		match message {
 			Message::Arrangement(project, message) => {
 				if project == self.project {
-					return self
+					// the plugin is being used, whether it was picked from the plugin
+					// picker or came with a project
+					let used = match &message {
+						arrangement_view::Message::PluginAddTo(_, descriptor, _) => {
+							self.plugins.mark_used(descriptor);
+							true
+						}
+						_ => false,
+					};
+
+					let task = self
 						.arrangement_view
 						.update(message, &self.config, &mut self.state)
 						.handle(
 							move |message| Message::Arrangement(project, message),
 							|instruction| self.handle_instruction(instruction),
 						);
+
+					return if used {
+						task.chain(Self::save_plugin_memory(self.plugins.memory()))
+					} else {
+						task
+					};
 				}
 			}
 			Message::ClapHost(message) => {
@@ -453,6 +519,14 @@ impl Daw {
 					.clap_host
 					.update(message, self.arrangement_view.arrangement.transport())
 					.handle(Message::ClapHost, |instruction| {
+						self.handle_instruction(instruction)
+					});
+			}
+			Message::Vst2Host(message) => {
+				return self
+					.vst2_host
+					.update(message, self.arrangement_view.arrangement.transport())
+					.handle(Message::Vst2Host, |instruction| {
 						self.handle_instruction(instruction)
 					});
 			}
@@ -467,11 +541,21 @@ impl Daw {
 			Message::FileTree(message) => return self.handle_file_tree_message(message),
 			Message::PluginPicker(message) => {
 				if let Some(plugin_picker) = &mut self.plugin_picker {
-					return plugin_picker
-						.update(message, &self.plugins)
+					let changed = matches!(&message, plugin_picker::Message::ToggleFavorite(_));
+
+					let action = plugin_picker.update(message, &mut self.plugins);
+
+					let save = if changed {
+						Self::save_plugin_memory(self.plugins.memory())
+					} else {
+						Task::none()
+					};
+
+					return action
 						.handle(Message::PluginPicker, |instruction| {
 							self.handle_instruction(instruction)
-						});
+						})
+						.chain(save);
 				}
 			}
 			Message::ConfigView(message) => {
@@ -483,12 +567,20 @@ impl Daw {
 						});
 				}
 			}
+			Message::Shortcut(chord, repeat) => {
+				let Some(message) = self.shortcut(chord, repeat) else {
+					return Task::none();
+				};
+
+				return self.update(message);
+			}
 			Message::CloseRequested(window) => {
 				if window == self.main_window_id {
 					if !self.recovering {
 						self.state.recovery_project = None;
 						self.state.write();
 					}
+					self.plugins.memory().write();
 					return iced::exit();
 				}
 			}
@@ -554,6 +646,7 @@ impl Daw {
 			}
 			Message::PluginScanned(scan, descriptor) => {
 				if self.scan == Some(scan) {
+					self.plugins.record_scan(&descriptor);
 					self.plugins.add(*descriptor, self.plugin_picker.as_mut());
 				}
 			}
@@ -562,6 +655,8 @@ impl Daw {
 					self.scan = None;
 					self.scan_progress = None;
 					self.scan_status = None;
+					self.plugins.finish_scan(self.plugin_picker.as_mut());
+					return Self::save_plugin_memory(self.plugins.memory());
 				}
 			}
 			Message::NewFile => {
@@ -642,7 +737,7 @@ impl Daw {
 				if let Err(err) = std::fs::write(
 					&path,
 					self.arrangement_view
-						.save(&mut self.clap_host, &self.vst3_host),
+						.save(&mut self.clap_host, &self.vst2_host, &self.vst3_host),
 				) {
 					warn!("{err}");
 					return Task::none();
@@ -675,7 +770,7 @@ impl Daw {
 					Arc::<Path>::from(AUTOSAVED_DIR.join(format!("{} {}.gdp", name, format_now())));
 				let gdp = self
 					.arrangement_view
-					.save(&mut self.clap_host, &self.vst3_host);
+					.save(&mut self.clap_host, &self.vst2_host, &self.vst3_host);
 
 				if let Some(last_path) = self
 					.state
@@ -825,12 +920,14 @@ impl Daw {
 				if self.progress.is_none() {
 					self.progress = Some(0.0);
 					self.clap_host.set_render_mode(RenderMode::Offline);
+					self.vst2_host.set_render_mode(RenderMode::Offline);
 					self.vst3_host.set_render_mode(RenderMode::Offline);
 					return self.arrangement_view.arrangement.render(&path);
 				}
 			}
 			Message::RenderedFile => {
 				self.clap_host.set_render_mode(RenderMode::Realtime);
+				self.vst2_host.set_render_mode(RenderMode::Realtime);
 				self.vst3_host.set_render_mode(RenderMode::Realtime);
 				self.progress = None;
 			}
@@ -868,9 +965,50 @@ impl Daw {
 				}
 
 				self.config = *config;
+				self.shortcuts = Manager::new(&self.config.shortcuts);
+			self.state.shortcuts = self.shortcuts.clone();
 				self.config.write();
 
 				return fut;
+			}
+			Message::PluginCopyState(id) => {
+				if let Some(state) = self.vst2_host.get_state(id) {
+					self.plugin_state = Some(state.into_boxed_slice());
+				} else if let Some(state) = self.vst3_host.get_state(id) {
+					self.plugin_state = Some(state.into_boxed_slice());
+				} else if let Some(state) = self
+					.clap_host
+					.get_state(id, StateContextType::ForDuplicate)
+					.map(Box::from)
+				{
+					self.plugin_state = Some(state);
+				}
+			}
+			Message::PluginPasteState(id) => {
+				let Some(state) = self.plugin_state.clone() else {
+					return Task::none();
+				};
+
+				if self.vst2_host.has(id) {
+					return self.update(Message::Vst2Host(vst2_host::Message::SetState(
+						id,
+						NoDebug(state),
+					)));
+				}
+
+				if self.vst3_host.has(id) {
+					return self.update(Message::Vst3Host(vst3_host::Message::SetState(
+						id,
+						NoDebug(state),
+					)));
+				}
+
+				if self.clap_host.has(id) {
+					return self.update(Message::ClapHost(clap_host::Message::SetState(
+						id,
+						NoDebug(state),
+					)));
+				}
 			}
 			Message::RescanDevices => {
 				let project = self.project;
@@ -880,86 +1018,17 @@ impl Daw {
 					.map(move |message| Message::Arrangement(project, message));
 			}
 			Message::RescanPlugins => {
-				let scan = Scan::unique();
-				self.plugins.clear(self.plugin_picker.as_mut());
-				self.scan = Some(scan);
-				self.scan_progress = Some(0.0);
-				self.scan_status = None;
-
-				let (sender, receiver) = smol::channel::unbounded();
-				let clap_paths = self.config.clap_paths.clone();
-
-				return Task::batch([
-					Task::future(unblock(move || {
-						let clap_plugin_paths = clap_host::find_plugin_paths(
-							DEFAULT_CLAP_PATHS.iter().chain(&clap_paths),
-						)
-						.collect::<Box<_>>();
-						let vst3_plugin_paths = generic_daw_core::vst3_host::find_plugin_paths(
-							generic_daw_core::vst3_host::DEFAULT_VST3_PATHS.iter(),
-						)
-						.collect::<Box<_>>();
-
-						let len = clap_plugin_paths.len() + vst3_plugin_paths.len();
-						let mut done = 0;
-
-						let status = |path: &Path| {
-							sender
-								.try_send(Message::ScanStatus(
-									scan,
-									path.file_name()
-										.map(|name| format!("scanning {}", name.display()).into()),
-								))
-								.unwrap();
-						};
-
-						for path in clap_plugin_paths {
-							status(&path);
-
-							if let Some(descriptors) = Plugin::descriptors(&path) {
-								for descriptor in descriptors {
-									sender
-										.try_send(Message::PluginScanned(
-											scan,
-											Box::new(PluginDescriptor::Clap(descriptor)),
-										))
-										.unwrap();
-								}
-							}
-
-							done += 1;
-							sender
-								.try_send(Message::ScanProgress(scan, done as f32 / len as f32))
-								.unwrap();
-						}
-
-						for path in vst3_plugin_paths {
-							status(&path);
-
-							if let Some(descriptors) =
-								generic_daw_core::vst3_host::descriptors(&path)
-							{
-								for descriptor in descriptors {
-									sender
-										.try_send(Message::PluginScanned(
-											scan,
-											Box::new(PluginDescriptor::Vst3(descriptor)),
-										))
-										.unwrap();
-								}
-							}
-
-							done += 1;
-							sender
-								.try_send(Message::ScanProgress(scan, done as f32 / len as f32))
-								.unwrap();
-						}
-
-						sender.try_send(Message::ScanFinished(scan)).unwrap();
-					}))
-					.discard(),
-					Task::stream(receiver),
-				]);
+				// Quick scan: only check if cached plugins still exist, and scan new directories
+				return self.quick_scan_plugins()
+			}
+			Message::FullRescanPlugins => {
+				// Full scan: scan all plugin directories from scratch
+				return self.full_scan_plugins()
+			}
+			Message::GenerateMeshes => {
+				// Reset mesh budget at the start of each frame
+				crate::mesh_budget::MeshBudget::reset();
+				return Task::none()
 			}
 			Message::FileHovered => self.files_hovered = true,
 			Message::FileDropped(path) => {
@@ -983,6 +1052,8 @@ impl Daw {
 				self.arrangement_view
 					.autoscroll(before, after, &self.config, &mut self.state);
 			}
+			Message::Undo => _ = self.arrangement_view.undo(),
+			Message::Redo => _ = self.arrangement_view.redo(),
 			Message::ToggleShowSeconds => {
 				self.state.show_seconds ^= true;
 				self.state.write();
@@ -1176,12 +1247,24 @@ impl Daw {
 		Task::none()
 	}
 
+	/// Writes what we remember about the plugins to disk, without blocking the main
+	/// thread while it does.
+	fn save_plugin_memory(memory: &PluginMemory) -> Task<Message> {
+		let memory = memory.clone();
+
+		Task::future(unblock(move || {
+			memory.write();
+		}))
+		.discard()
+	}
+
 	fn handle_instruction(&mut self, instruction: Instruction) -> Task<Message> {
 		match instruction {
 			Instruction::Message(message) => return self.update(message),
 			Instruction::Freeze(node) => {
 				self.progress = Some(0.0);
 				self.clap_host.set_render_mode(RenderMode::Offline);
+				self.vst2_host.set_render_mode(RenderMode::Offline);
 				self.vst3_host.set_render_mode(RenderMode::Offline);
 				return self.arrangement_view.arrangement.freeze(node, self.project);
 			}
@@ -1196,6 +1279,28 @@ impl Daw {
 					.clap_host
 					.plugin_add(id, plugin, receiver)
 					.map(Message::ClapHost);
+			}
+			Instruction::Vst2PluginAdd(id, plugin, receiver) => {
+				return self
+					.vst2_host
+					.plugin_add(id, plugin, receiver)
+					.map(Message::Vst2Host);
+			}
+			Instruction::Vst2PluginActivate(id, audio, params) => {
+				if let Some((node, index)) = self.arrangement_view.arrangement.plugin_of(id) {
+					return self
+						.arrangement_view
+						.arrangement
+						.plugin_activate_vst2(node, index, audio, params);
+				}
+			}
+			Instruction::Vst2PluginRestart(id, processor) => {
+				if let Some((node, index)) = self.arrangement_view.arrangement.plugin_of(id) {
+					return self
+						.arrangement_view
+						.arrangement
+						.plugin_restart_vst2(node, index, processor);
+				}
 			}
 			Instruction::Vst3PluginAdd(id, plugin, receiver) => {
 				return self
@@ -1220,6 +1325,13 @@ impl Daw {
 				}
 			}
 			Instruction::PluginCopyState(from, to) => {
+				if let Some(state) = self.vst2_host.get_state(from) {
+					return self.update(Message::Vst2Host(vst2_host::Message::SetState(
+						to,
+						NoDebug(state.into_boxed_slice()),
+					)));
+				}
+
 				if let Some(state) = self.vst3_host.get_state(from) {
 					return self.update(Message::Vst3Host(vst3_host::Message::SetState(
 						to,
@@ -1310,6 +1422,10 @@ impl Daw {
 			return gui.map(Message::ClapHost);
 		}
 
+		if let Some(gui) = self.vst2_host.view(window) {
+			return gui.map(Message::Vst2Host);
+		}
+
 		if let Some(gui) = self.vst3_host.view(window) {
 			return gui.map(Message::Vst3Host);
 		}
@@ -1322,23 +1438,88 @@ impl Daw {
 		stack![
 			column![
 				row![
-					Menu::new(menu(), || container(column![
-						menu_entry(None, "New", "Ctrl+N").on_press(Message::NewFile),
-						menu_entry(None, "Open", "Ctrl+O").on_press(Message::OpenFileDialog),
-						menu_entry(None, "Open last", "Ctrl+Shift+O")
-							.on_press(Message::OpenLastFile),
-						menu_entry(None, "Save", "Ctrl+S").on_press(Message::SaveFile),
-						menu_entry(None, "Save as", "Ctrl+Shift+S")
-							.on_press(Message::SaveAsFileDialog),
-						menu_entry(None, "Render", "Ctrl+R").on_press(Message::RenderFileDialog),
-						rule::horizontal(1),
-						menu_entry(None, "Reconnect devices", "").on_press(Message::RescanDevices),
-						menu_entry(None, "Rescan plugins", "").on_press(Message::RescanPlugins),
-						menu_entry(None, "Settings", "Ctrl+,").on_press(Message::ToggleConfigView),
-					])
-					.width(200)
-					.style(container_with_radius(weaker_bordered_box, 5))
-					.into())
+					Menu::new(menu_icon(), || {
+						menu_width(
+							vec![
+								MenuItem::Action {
+									icon: Some(file()),
+									label: "New".into(),
+									shortcut: self.shortcuts.label(Action::NewFile),
+									message: Message::NewFile,
+								},
+								MenuItem::Action {
+									icon: Some(folder_open()),
+									label: "Open".into(),
+									shortcut: self.shortcuts.label(Action::OpenFile),
+									message: Message::OpenFileDialog,
+								},
+								MenuItem::Action {
+									icon: Some(history()),
+									label: "Open last".into(),
+									shortcut: self.shortcuts.label(Action::OpenLastFile),
+									message: Message::OpenLastFile,
+								},
+								MenuItem::Action {
+									icon: Some(save()),
+									label: "Save".into(),
+									shortcut: self.shortcuts.label(Action::SaveFile),
+									message: Message::SaveFile,
+								},
+								MenuItem::Action {
+									icon: Some(save()),
+									label: "Save as".into(),
+									shortcut: self.shortcuts.label(Action::SaveAsFile),
+									message: Message::SaveAsFileDialog,
+								},
+								MenuItem::Action {
+									icon: Some(gavel()),
+									label: "Render".into(),
+									shortcut: self.shortcuts.label(Action::RenderFile),
+									message: Message::RenderFileDialog,
+								},
+								MenuItem::Separator,
+								MenuItem::Action {
+									icon: Some(history()),
+									label: "Undo".into(),
+									shortcut: self.shortcuts.label(Action::Undo),
+									message: Message::Undo,
+								},
+								MenuItem::Action {
+									icon: Some(arrow_big_right()),
+									label: "Redo".into(),
+									shortcut: self.shortcuts.label(Action::Redo),
+									message: Message::Redo,
+								},
+								MenuItem::Separator,
+								MenuItem::Action {
+									icon: Some(midi_port()),
+									label: "Reconnect devices".into(),
+									shortcut: String::new(),
+									message: Message::RescanDevices,
+								},
+								MenuItem::Action {
+									icon: Some(sliders_vertical()),
+									label: "Rescan plugins".into(),
+									shortcut: String::new(),
+									message: Message::RescanPlugins,
+								},
+								MenuItem::Action {
+									icon: Some(sliders_vertical()),
+									label: "Full rescan plugins".into(),
+									shortcut: String::new(),
+									message: Message::FullRescanPlugins,
+								},
+								MenuItem::Separator,
+								MenuItem::Action {
+									icon: Some(settings()),
+									label: "Settings".into(),
+									shortcut: self.shortcuts.label(Action::ToggleSettings),
+									message: Message::ToggleConfigView,
+								},
+							],
+							200.0,
+						)
+					})
 					.style(button_with_radius(button::background, 5))
 					.padding(padding::horizontal(7).vertical(5)),
 					rule::vertical(1),
@@ -1826,6 +2007,7 @@ impl Daw {
 	pub fn title(&self, window: window::Id) -> String {
 		self.clap_host
 			.title(window)
+			.or_else(|| self.vst2_host.title(window))
 			.or_else(|| self.vst3_host.title(window))
 			.or_else(|| {
 				self.current_project
@@ -1855,6 +2037,7 @@ impl Daw {
 				.with(self.project)
 				.map(|(project, message)| Message::Arrangement(project, message)),
 			self.clap_host.subscription().map(Message::ClapHost),
+			Vst2Host::subscription().map(Message::Vst2Host),
 			Vst3Host::subscription().map(Message::Vst3Host),
 			if self.config.autosave.enabled && !self.recovering {
 				every(Duration::from_secs(
@@ -1866,55 +2049,22 @@ impl Daw {
 			},
 			if self.progress.is_none() {
 				keyboard::listen()
-					.with((
-						self.recovering,
-						self.config_view.is_some(),
-						self.plugin_picker.is_some(),
-						self.project,
-						self.bottom_pane
-							.filter(|_| self.bottom_selected)
-							.unwrap_or(self.top_pane),
-					))
-					.filter_map(
-						|((recovering, config_view, plugin_picker, project, tab), event)| {
-							match event {
-								keyboard::Event::KeyPressed {
-									key,
-									physical_key,
-									modifiers,
-									repeat,
-									..
-								} => {
-									if recovering {
-										Self::recovering_keybinds(&key, modifiers, repeat)
-									} else {
-										if config_view {
-											ConfigView::keybinds(&key, modifiers, repeat)
-										} else if plugin_picker {
-											PluginPicker::keybinds(&key, modifiers, repeat)
-										} else {
-											ArrangementView::keybinds(
-												&key,
-												physical_key,
-												modifiers,
-												repeat,
-											)
-											.map(|message| {
-												Message::Arrangement(project, message(tab))
-											})
-										}
-										.or_else(|| {
-											Self::keybinds(&key, physical_key, modifiers, repeat)
-										})
-									}
-								}
-								_ => None,
-							}
-						},
-					)
+					.filter_map(|event| match event {
+						keyboard::Event::KeyPressed {
+							key,
+							physical_key,
+							modifiers,
+							repeat,
+							..
+						} => Chord::from_event(&key, physical_key, modifiers)
+							.map(|chord| Message::Shortcut(chord, repeat)),
+						_ => None,
+					})
 			} else {
 				Subscription::none()
 			},
+			// Reset mesh budget at the start of each frame
+			window::frames().map(|_| Message::GenerateMeshes),
 			window::events().filter_map(|(window, event)| match event {
 				window::Event::CloseRequested => Some(Message::CloseRequested(window)),
 				window::Event::FileHovered(..) => Some(Message::FileHovered),
@@ -1925,86 +2075,360 @@ impl Daw {
 		])
 	}
 
-	fn keybinds(
-		key: &keyboard::Key,
-		physical_key: keyboard::key::Physical,
-		modifiers: keyboard::Modifiers,
-		repeat: bool,
-	) -> Option<Message> {
-		match (
-			modifiers.command(),
-			modifiers.shift(),
-			modifiers.alt(),
-			repeat,
-		) {
-			(false, false, false, false) => match key.as_ref() {
-				keyboard::Key::Named(keyboard::key::Named::Space) => Some(Message::TogglePlayback),
-				keyboard::Key::Named(keyboard::key::Named::F11) => Some(Message::ToggleFullscreen),
-				keyboard::Key::Named(keyboard::key::Named::Tab) => Some(Message::CycleForwards),
-				_ => None,
-			},
-			(true, false, false, false) => match key.to_latin(physical_key) {
-				Some(',') => Some(Message::ToggleConfigView),
-				Some('m') => Some(Message::ToggleMetronome),
-				Some('n') => Some(Message::NewFile),
-				Some('o') => Some(Message::OpenFileDialog),
-				Some('r') => Some(Message::RenderFileDialog),
-				Some('s') => Some(Message::SaveFile),
-				Some('w') => Some(Message::ClosePane),
-				Some('1') => Some(Message::NarrowedGrid),
-				Some('2') => Some(Message::WidenedGrid),
-				Some('3') => Some(Message::ToggleGridTriplets),
-				Some('4') => Some(Message::ToggleGrid),
-				_ => None,
-			},
-			(false, true, false, false) => match key.as_ref() {
-				keyboard::Key::Named(keyboard::key::Named::Space) => Some(Message::Stop),
-				keyboard::Key::Named(keyboard::key::Named::Tab) => Some(Message::CycleBackwards),
-				_ => None,
-			},
-			(true, true, false, false) => match key.to_latin(physical_key) {
-				Some('o') => Some(Message::OpenLastFile),
-				Some('s') => Some(Message::SaveAsFileDialog),
-				_ => None,
-			},
-			(false, false, true, false) => match key.as_ref() {
-				keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-					Some(Message::BottomSelected(false))
-				}
-				keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-					Some(Message::BottomSelected(true))
-				}
-				_ => None,
-			},
-			(false, true, true, false) => match key.as_ref() {
-				keyboard::Key::Named(keyboard::key::Named::ArrowUp) => Some(Message::MovePaneUp),
-				keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-					Some(Message::MovePaneDown)
-				}
-				_ => None,
-			},
+	/// The message of a shortcut that applies everywhere in the app.
+	fn keybinds(action: Action) -> Option<Message> {
+		match action {
+			Action::TogglePlayback => Some(Message::TogglePlayback),
+			Action::Stop => Some(Message::Stop),
+			Action::Undo => Some(Message::Undo),
+			Action::Redo => Some(Message::Redo),
+			Action::ToggleFullscreen => Some(Message::ToggleFullscreen),
+			Action::ToggleMetronome => Some(Message::ToggleMetronome),
+			Action::ToggleSettings => Some(Message::ToggleConfigView),
+			Action::NewFile => Some(Message::NewFile),
+			Action::OpenFile => Some(Message::OpenFileDialog),
+			Action::OpenLastFile => Some(Message::OpenLastFile),
+			Action::SaveFile => Some(Message::SaveFile),
+			Action::SaveAsFile => Some(Message::SaveAsFileDialog),
+			Action::RenderFile => Some(Message::RenderFileDialog),
+			Action::ClosePane => Some(Message::ClosePane),
+			Action::NarrowedGrid => Some(Message::NarrowedGrid),
+			Action::WidenedGrid => Some(Message::WidenedGrid),
+			Action::ToggleGridTriplets => Some(Message::ToggleGridTriplets),
+			Action::ToggleGrid => Some(Message::ToggleGrid),
+			Action::CycleForwards => Some(Message::CycleForwards),
+			Action::CycleBackwards => Some(Message::CycleBackwards),
+			Action::SelectPaneUp => Some(Message::BottomSelected(false)),
+			Action::SelectPaneDown => Some(Message::BottomSelected(true)),
+			Action::MovePaneUp => Some(Message::MovePaneUp),
+			Action::MovePaneDown => Some(Message::MovePaneDown),
 			_ => None,
 		}
 	}
 
-	fn recovering_keybinds(
-		key: &keyboard::Key,
-		modifiers: keyboard::Modifiers,
-		repeat: bool,
-	) -> Option<Message> {
-		match (
-			modifiers.command(),
-			modifiers.shift(),
-			modifiers.alt(),
-			repeat,
-		) {
-			(false, false, false, false) => match key.as_ref() {
-				keyboard::Key::Named(keyboard::key::Named::Escape) => {
-					Some(Message::DismissRecoveryView)
-				}
-				_ => None,
-			},
-			_ => None,
+	/// The message of the shortcut that was pressed, if there is one.
+	fn shortcut(&mut self, chord: Chord, repeat: bool) -> Option<Message> {
+		if self.recovering {
+			// the recovery view is a special case: the only thing that can be
+			// done is to go back to what the user was doing
+			return (chord == Chord::ESCAPE).then_some(Message::DismissRecoveryView);
 		}
+
+		// the settings are in the way, so they get the key first
+		if let Some(config_view) = &mut self.config_view {
+			if config_view.is_recording() {
+				return Some(Message::ConfigView(
+					config_view::Message::ShortcutPressed(chord),
+				));
+			}
+
+			let action = self.shortcuts.lookup(Context::Settings, &chord)?;
+
+			if repeat && !action.repeatable() {
+				return None;
+			}
+
+			return ConfigView::keybinds(action);
+		}
+
+		// the plugin picker is in the way, so it gets the key first
+		if self.plugin_picker.is_some() {
+			let action = self.shortcuts.lookup(Context::PluginPicker, &chord)?;
+
+			if repeat && !action.repeatable() {
+				return None;
+			}
+
+			return PluginPicker::keybinds(action);
+		}
+
+		// the arrangement gets the key before the app does
+		let action = self
+			.shortcuts
+			.lookup(Context::Arrangement, &chord)
+			.or_else(|| self.shortcuts.lookup(Context::Global, &chord))?;
+
+		if repeat && !action.repeatable() {
+			return None;
+		}
+
+		if let Some(message) = ArrangementView::keybinds(action) {
+			let project = self.project;
+			let tab = self
+				.bottom_pane
+				.filter(|_| self.bottom_selected)
+				.unwrap_or(self.top_pane);
+
+			return Some(Message::Arrangement(project, message(tab)));
+		}
+
+		Self::keybinds(action)
+	}
+
+	/// Quick scan: check if cached plugins still exist, and only scan directories that might have new plugins.
+	fn quick_scan_plugins(&mut self) -> Task<Message> {
+		let scan = Scan::unique();
+		self.plugins.start_scan();
+		self.scan = Some(scan);
+		self.scan_progress = Some(0.0);
+		self.scan_status = None;
+
+		// First, load all cached plugins that still exist on disk
+		let cached_descriptors = self
+			.plugins
+			.memory()
+			.plugins
+			.iter()
+			.filter_map(PluginEntry::descriptor)
+			.filter(|desc| desc.path().exists())
+			.collect::<Vec<_>>();
+
+		// Add cached plugins immediately
+		for descriptor in &cached_descriptors {
+			self.plugins.record_scan(descriptor);
+			self.plugins.add(descriptor.clone(), self.plugin_picker.as_mut());
+		}
+
+		// Find plugin paths from config and defaults
+		let clap_paths = self.config.clap_paths.clone();
+		let (sender, receiver) = smol::channel::unbounded();
+
+		return Task::batch([
+			Task::future(unblock(move || {
+				// Find all plugin paths
+				let clap_plugin_paths = clap_host::find_plugin_paths(
+					DEFAULT_CLAP_PATHS.iter().chain(&clap_paths),
+				)
+				.collect::<Box<_>>();
+				let vst2_plugin_paths = generic_daw_core::vst2_host::find_plugin_paths(
+					generic_daw_core::vst2_host::DEFAULT_VST2_PATHS.iter(),
+				)
+				.collect::<Box<_>>();
+				let vst3_plugin_paths = generic_daw_core::vst3_host::find_plugin_paths(
+					generic_daw_core::vst3_host::DEFAULT_VST3_PATHS.iter(),
+				)
+				.collect::<Box<_>>();
+
+				// Build a set of known plugin paths from cache
+				let known_paths: std::collections::HashSet<Arc<Path>> = cached_descriptors
+					.iter()
+					.map(|d| d.path().clone())
+					.collect();
+
+				// Filter to only NEW paths that we haven't checked
+				let new_clap_paths: Vec<_> = clap_plugin_paths
+					.into_iter()
+					.filter(|p| !known_paths.contains(p))
+					.collect();
+				let new_vst2_paths: Vec<_> = vst2_plugin_paths
+					.into_iter()
+					.filter(|p| !known_paths.contains(p))
+					.collect();
+				let new_vst3_paths: Vec<_> = vst3_plugin_paths
+					.into_iter()
+					.filter(|p| !known_paths.contains(p))
+					.collect();
+
+				let len = new_clap_paths.len() + new_vst2_paths.len() + new_vst3_paths.len();
+				let mut done = 0;
+
+				let status = |path: &Path| {
+					sender
+						.try_send(Message::ScanStatus(
+							scan,
+							path.file_name()
+								.map(|name| format!("scanning {}", name.display()).into()),
+						))
+						.unwrap();
+				};
+
+				for path in new_clap_paths {
+					status(&path);
+
+					if let Some(descriptors) = Plugin::descriptors(&path) {
+						for descriptor in descriptors {
+							sender
+								.try_send(Message::PluginScanned(
+									scan,
+									Box::new(PluginDescriptor::Clap(descriptor)),
+								))
+								.unwrap();
+						}
+					}
+
+					done += 1;
+					if len > 0 {
+						sender
+							.try_send(Message::ScanProgress(scan, done as f32 / len as f32))
+							.unwrap();
+					}
+				}
+
+				// The plugins are made in a program of its own, so that a plugin
+				// that crashes doesn't take this program with it.
+				generic_daw_core::vst2_host::scan::scan(
+					&new_vst2_paths,
+					|event| match event {
+						generic_daw_core::vst2_host::scan::Event::Scanning(path) => {
+							status(&path);
+						}
+						generic_daw_core::vst2_host::scan::Event::Found(descriptor) => {
+							sender
+								.try_send(Message::PluginScanned(
+									scan,
+									Box::new(PluginDescriptor::Vst2(descriptor)),
+								))
+								.unwrap();
+						}
+					},
+				);
+
+				done += new_vst2_paths.len();
+				if len > 0 {
+					sender
+						.try_send(Message::ScanProgress(scan, done as f32 / len as f32))
+						.unwrap();
+				}
+
+				for path in new_vst3_paths {
+					status(&path);
+
+					if let Some(descriptors) = generic_daw_core::vst3_host::descriptors(&path) {
+						for descriptor in descriptors {
+							sender
+								.try_send(Message::PluginScanned(
+									scan,
+									Box::new(PluginDescriptor::Vst3(descriptor)),
+								))
+								.unwrap();
+						}
+					}
+
+					done += 1;
+					if len > 0 {
+						sender
+							.try_send(Message::ScanProgress(scan, done as f32 / len as f32))
+							.unwrap();
+					}
+				}
+
+				sender.try_send(Message::ScanFinished(scan)).unwrap();
+			}))
+			.discard(),
+			Task::stream(receiver),
+		]);
+	}
+
+	/// Full scan: scan all plugin directories from scratch.
+	fn full_scan_plugins(&mut self) -> Task<Message> {
+		let scan = Scan::unique();
+		self.plugins.start_scan();
+		self.scan = Some(scan);
+		self.scan_progress = Some(0.0);
+		self.scan_status = None;
+
+		let (sender, receiver) = smol::channel::unbounded();
+		let clap_paths = self.config.clap_paths.clone();
+
+		return Task::batch([
+			Task::future(unblock(move || {
+				let clap_plugin_paths = clap_host::find_plugin_paths(
+					DEFAULT_CLAP_PATHS.iter().chain(&clap_paths),
+				)
+				.collect::<Box<_>>();
+				let vst2_plugin_paths = generic_daw_core::vst2_host::find_plugin_paths(
+					generic_daw_core::vst2_host::DEFAULT_VST2_PATHS.iter(),
+				)
+				.collect::<Box<_>>();
+				let vst3_plugin_paths = generic_daw_core::vst3_host::find_plugin_paths(
+					generic_daw_core::vst3_host::DEFAULT_VST3_PATHS.iter(),
+				)
+				.collect::<Box<_>>();
+
+				let len =
+					clap_plugin_paths.len() + vst2_plugin_paths.len() + vst3_plugin_paths.len();
+				let mut done = 0;
+
+				let status = |path: &Path| {
+					sender
+						.try_send(Message::ScanStatus(
+							scan,
+							path.file_name()
+								.map(|name| format!("scanning {}", name.display()).into()),
+						))
+						.unwrap();
+				};
+
+				for path in clap_plugin_paths {
+					status(&path);
+
+					if let Some(descriptors) = Plugin::descriptors(&path) {
+						for descriptor in descriptors {
+							sender
+								.try_send(Message::PluginScanned(
+									scan,
+									Box::new(PluginDescriptor::Clap(descriptor)),
+								))
+								.unwrap();
+						}
+					}
+
+					done += 1;
+					sender
+						.try_send(Message::ScanProgress(scan, done as f32 / len as f32))
+						.unwrap();
+				}
+
+				// The plugins are made in a program of its own, so that a plugin
+				// that crashes doesn't take this program with it.
+				generic_daw_core::vst2_host::scan::scan(
+					&vst2_plugin_paths,
+					|event| match event {
+						generic_daw_core::vst2_host::scan::Event::Scanning(path) => {
+							status(&path);
+						}
+						generic_daw_core::vst2_host::scan::Event::Found(descriptor) => {
+							sender
+								.try_send(Message::PluginScanned(
+									scan,
+									Box::new(PluginDescriptor::Vst2(descriptor)),
+								))
+								.unwrap();
+						}
+					},
+				);
+
+				done += vst2_plugin_paths.len();
+				sender
+					.try_send(Message::ScanProgress(scan, done as f32 / len as f32))
+					.unwrap();
+
+				for path in vst3_plugin_paths {
+					status(&path);
+
+					if let Some(descriptors) =
+						generic_daw_core::vst3_host::descriptors(&path)
+					{
+						for descriptor in descriptors {
+							sender
+								.try_send(Message::PluginScanned(
+									scan,
+									Box::new(PluginDescriptor::Vst3(descriptor)),
+								))
+								.unwrap();
+						}
+					}
+
+					done += 1;
+					sender
+						.try_send(Message::ScanProgress(scan, done as f32 / len as f32))
+						.unwrap();
+				}
+
+				sender.try_send(Message::ScanFinished(scan)).unwrap();
+			}))
+			.discard(),
+			Task::stream(receiver),
+		]);
 	}
 }

@@ -1,4 +1,7 @@
-use crate::{LazyElement, menu_overlay::MenuOverlay};
+use crate::{
+	LazyElement,
+	menu_overlay::{Anchor, MenuOverlay},
+};
 use iced_widget::{
 	Renderer, Theme,
 	core::{
@@ -180,7 +183,8 @@ impl<Message> Widget<Message, Theme, Renderer> for ContextMenu<'_, Message> {
 			content: &mut self.context_menu,
 			tree: second,
 			state: &mut state.position,
-			bounds: Rectangle::new(position + translation, Size::ZERO),
+			anchor: Anchor::TopLeft(position + translation),
+			parent: None,
 		}));
 
 		let Some(content_overlay) =
