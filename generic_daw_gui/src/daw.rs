@@ -1892,6 +1892,7 @@ impl Daw {
 							.padding(15)
 							.style(container_with_radius(weakest_bordered_box, 10))
 						)
+						)
 						.style(|_| container::background(Color::BLACK.scale_alpha(ALPHA_2_3))),
 					)
 					.on_press(Message::CancelPendingAction),
