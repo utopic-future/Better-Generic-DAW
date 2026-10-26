@@ -419,7 +419,11 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 						(start_track.min(end_track), start_track.max(end_track));
 					let (start_pos, end_pos) = (start_pos.min(end_pos), start_pos.max(end_pos));
 
-					self.tracks
+					state
+						.primary
+						.retain(|&(track, _)| (start_track..=end_track).contains(&track));
+
+					self.tracks[start_track..=end_track]
 						.iter()
 						.flat_map(|track| &track.clips)
 						.for_each(|clip| {
@@ -440,9 +444,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 								}
 							};
 
-							if (start_track..=end_track).contains(&index.0)
-								&& start_pos.max(start) < end_pos.min(end)
-							{
+							if start_pos.max(start) < end_pos.min(end) {
 								state.primary.insert(index);
 							} else {
 								state.primary.remove(&index);
