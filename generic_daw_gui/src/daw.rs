@@ -1870,17 +1870,23 @@ impl Daw {
 									rule::horizontal(1),
 									row![
 										button("Save")
-										.style(button_with_radius(button::success, border::left(5)))
+											.style(button_with_radius(
+												button::success,
+												border::left(5)
+											))
 										.on_press(Message::SavePendingAction),
 										button("Don't Save")
-										.style(button_with_radius(button::warning, 0))
-										.on_press(Message::DiscardPendingAction),
+											.style(button_with_radius(button::warning, 0))
+											.on_press(Message::DiscardPendingAction),
 										button("Cancel")
-										.style(button_with_radius(button::subtle, border::right(5)))
+											.style(button_with_radius(
+												button::subtle,
+												border::right(5)
+											))
 										.on_press(Message::CancelPendingAction),
-									]
-									.spacing(10)
 								]
+									.spacing(10)
+							]
 							.width(Shrink)
 							.spacing(10)
 							.padding(15)
@@ -1888,8 +1894,10 @@ impl Daw {
 						))
 						.style(|_| container::background(Color::BLACK.scale_alpha(ALPHA_2_3))),
 					)
+					.on_press(Message::CancelPendingAction),
 				)
 			}),
+
 			self.progress.map(|progress| mouse_area(
 				container(
 					column![
