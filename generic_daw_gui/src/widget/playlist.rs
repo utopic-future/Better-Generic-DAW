@@ -875,6 +875,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 			.iter_mut()
 			.zip(&mut tree.children)
 			.zip(layout.children())
+			.filter(|((_, _), layout)| layout.bounds().intersects(viewport))
 			.filter_map(|((child, tree), layout)| {
 				child.overlay(tree, layout, renderer, viewport, translation)
 			})
