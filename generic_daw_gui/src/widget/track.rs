@@ -54,8 +54,8 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Track<'a, Message> {
 		viewport: &Rectangle,
 	) {
 		// Compute visible clip range based on viewport
-		let viewport_left = viewport.x - layout.position().x;
-		let viewport_right = viewport_left + viewport.width;
+		let viewport_left = viewport.x;
+		let viewport_right = viewport.x + viewport.width;
 
 		for (i, ((child, tree), clip_layout)) in self
 			.clips
@@ -104,8 +104,8 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Track<'a, Message> {
 		viewport: &Rectangle,
 		renderer: &Renderer,
 	) -> Interaction {
-		let viewport_left = viewport.x - layout.position().x;
-		let viewport_right = viewport_left + viewport.width;
+		let viewport_left = viewport.x;
+		let viewport_right = viewport.x + viewport.width;
 
 		self.clips
 			.iter()
@@ -136,8 +136,8 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Track<'a, Message> {
 		viewport: &Rectangle,
 		translation: Vector,
 	) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
-		let viewport_left = viewport.x - layout.position().x;
-		let viewport_right = viewport_left + viewport.width;
+		let viewport_left = viewport.x;
+		let viewport_right = viewport.x + viewport.width;
 
 		let children = self
 			.clips
