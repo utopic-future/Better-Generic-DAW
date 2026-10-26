@@ -365,11 +365,11 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for PianoRoll<'a, Message
 		cursor: Cursor,
 		viewport: &Rectangle,
 	) {
-		let mut state = self.state.borrow_mut();
+		let scale = self.state.borrow().scale;
 
 		for key in (0..127).map(MidiKey) {
 			let Some(bounds) = Rectangle::new(
-				layout.bounds().position() + Vector::new(0.0, key_to_px(key, state.scale)),
+				layout.bounds().position() + Vector::new(0.0, key_to_px(key, scale)),
 				Size::new(f32::INFINITY, 1.0),
 			)
 			.intersection(viewport) else {
@@ -385,12 +385,10 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for PianoRoll<'a, Message
 			);
 		}
 
-		let State {
-			draw_layers,
-			draw_layer_count,
-			active_by_key,
-			..
-		} = &mut *state;
+		let (mut draw_layers, mut active_by_key) = {
+			let mut state = self.state.borrow_mut();
+			(std::mem::take(&mut state.draw_layers), std::mem::take(&mut state.active_by_key))
+		};
 		for layer in draw_layers.iter_mut() {
 			layer.clear();
 		}
@@ -398,7 +396,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for PianoRoll<'a, Message
 		for active in active_by_key.iter_mut() {
 			active.clear();
 		}
-		*draw_layer_count = 0;
+		let mut draw_layer_count = 0;
 
 		// Visit each note once, then keep overlap state per pitch.
 		for (i, (note, note_layout)) in self.notes.iter().zip(layout.children()).enumerate() {
@@ -419,10 +417,10 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for PianoRoll<'a, Message
 				draw_layers.resize_with(layer + 1, Vec::new);
 			}
 			draw_layers[layer].push(i);
-			*draw_layer_count = (*draw_layer_count).max(layer + 1);
+			draw_layer_count = draw_layer_count.max(layer + 1);
 		}
 
-		for (i, alloc) in draw_layers[..*draw_layer_count].iter().enumerate() {
+		for (i, alloc) in draw_layers[..draw_layer_count].iter().enumerate() {
 			if i != 0 {
 				renderer.start_layer(Rectangle::INFINITE);
 			}
@@ -444,18 +442,22 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for PianoRoll<'a, Message
 			}
 		}
 
-		if let Status::Selecting(start_key, end_key, start_pos, end_pos, _) = state.status
+		let (status, scale, position) = {
+			let state = self.state.borrow();
+			(state.status, state.scale, state.position)
+		};
+		if let Status::Selecting(start_key, end_key, start_pos, end_pos, _) = status
 			&& start_pos != end_pos
 		{
 			let (start_key, end_key) = (start_key.max(end_key), start_key.min(end_key));
 			let (start_pos, end_pos) = (start_pos.min(end_pos), start_pos.max(end_pos));
 
-			let y = key_to_px(start_key, state.scale);
-			let height = key_to_px(end_key, state.scale) + state.scale.y - y;
+			let y = key_to_px(start_key, scale);
+			let height = key_to_px(end_key, scale) + scale.y - y;
 			let y = y + layout.position().y;
 
-			let x = time_to_px(start_pos, state.position, state.scale, self.transport);
-			let width = time_to_px(end_pos, state.position, state.scale, self.transport) - x;
+			let x = time_to_px(start_pos, position, scale, self.transport);
+			let width = time_to_px(end_pos, position, scale, self.transport) - x;
 			let x = x + viewport.x;
 
 			renderer.with_layer(*viewport, |renderer| {
@@ -474,6 +476,11 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for PianoRoll<'a, Message
 				);
 			});
 		}
+
+		let mut state = self.state.borrow_mut();
+		state.draw_layers = draw_layers;
+		state.draw_layer_count = draw_layer_count;
+		state.active_by_key = active_by_key;
 	}
 
 	fn mouse_interaction(
