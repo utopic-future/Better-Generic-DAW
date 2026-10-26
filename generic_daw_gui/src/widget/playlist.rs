@@ -717,25 +717,25 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 
 		renderer.with_layer(viewport, |renderer| {
 			for (i, alloc) in allocs.into_iter().enumerate() {
-			if i != 0 {
-				renderer.start_layer(Rectangle::INFINITE);
-			}
+				if i != 0 {
+					renderer.start_layer(Rectangle::INFINITE);
+				}
 
-			for (track, clip) in alloc {
-				self.tracks[track].clips[clip].draw(
-					&tree.children[track].children[clip],
-					renderer,
-					theme,
-					style,
-					layout.child(track).child(clip),
-					cursor,
-					&viewport,
-				);
-			}
+				for (track, clip) in alloc {
+					self.tracks[track].clips[clip].draw(
+						&tree.children[track].children[clip],
+						renderer,
+						theme,
+						style,
+						layout.child(track).child(clip),
+						cursor,
+						&viewport,
+					);
+				}
 
-			if i != 0 {
-				renderer.end_layer();
-			}
+				if i != 0 {
+					renderer.end_layer();
+				}
 			}
 		});
 
