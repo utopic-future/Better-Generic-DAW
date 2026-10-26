@@ -334,7 +334,6 @@ impl Tab {
 	}
 }
 
-#[derive(Debug)]
 #[derive(Clone, Debug)]
 enum PendingAction {
 	Exit(window::Id),
@@ -342,6 +341,7 @@ enum PendingAction {
 	New,
 }
 
+#[derive(Debug)]
 pub struct Daw {
 	config: Config,
 	state: State,
@@ -2120,7 +2120,7 @@ impl Daw {
 		let current = self.serialize_project();
 		self.saved_project
 			.as_ref()
-			.is_none_or(|saved| *saved != current)
+			.map_or(true, |saved| *saved != current)
 	}
 
 	fn perform_pending_action(&mut self, action: PendingAction) -> Task<Message> {
