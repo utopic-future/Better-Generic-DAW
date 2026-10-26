@@ -111,7 +111,8 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Track<'a, Message> {
 			.iter()
 			.zip(&tree.children)
 			.zip(layout.children())
-			.filter_map(|((child, tree), clip_layout)| {
+			.rev()
+			.find_map(|((child, tree), clip_layout)| {
 				// Skip clips outside horizontal viewport
 				let clip_bounds = clip_layout.bounds();
 				if clip_bounds.x + clip_bounds.width < viewport_left
@@ -119,9 +120,11 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Track<'a, Message> {
 				{
 					return None;
 				}
-				Some(child.mouse_interaction(tree, clip_layout, cursor, viewport, renderer))
+
+				let interaction =
+					child.mouse_interaction(tree, clip_layout, cursor, viewport, renderer);
+				(interaction != Interaction::default()).then_some(interaction)
 			})
-			.rfind(|&i| i != Interaction::default())
 			.unwrap_or_default()
 	}
 
