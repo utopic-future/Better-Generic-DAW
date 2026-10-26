@@ -668,8 +668,7 @@ impl<Message> Widget<Message, Theme, Renderer> for Clip<'_, Message> {
 				if visible_right > visible_left {
 					let first_tile = (visible_left / WAVEFORM_TILE_WIDTH).floor() as usize;
 					let last_tile =
-						((visible_right - f32::EPSILON).max(visible_left) / WAVEFORM_TILE_WIDTH)
-							.floor() as usize;
+						(visible_right / WAVEFORM_TILE_WIDTH).ceil() as usize - 1;
 					let local_bounds = Rectangle::new(Point::ORIGIN, unclipped_bounds.size());
 					let resample_ratio = inner.sample.resample_ratio(self.transport);
 					let mut mesh_tiles = state.mesh_tiles.borrow_mut();
