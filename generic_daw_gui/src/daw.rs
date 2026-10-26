@@ -615,6 +615,7 @@ impl Daw {
 					NoClone(NoDebug(processor)),
 					view,
 				) = *data;
+				let is_new_project = path.is_none();
 
 				self.plugin_picker = None;
 
@@ -639,6 +640,9 @@ impl Daw {
 					ArrangementView::new(arrangement, &self.state, view),
 				)
 				.arrangement;
+				if is_new_project {
+					self.saved_project = Some(self.serialize_project());
+				}
 
 				let p_receiver = arrangement.request_processor(PullSlot::Full(processor));
 
@@ -1885,7 +1889,7 @@ impl Daw {
 						.style(|_| container::background(Color::BLACK.scale_alpha(ALPHA_2_3))),
 					)
 				)
-			})
+			}),
 			self.progress.map(|progress| mouse_area(
 				container(
 					column![
@@ -2113,9 +2117,10 @@ impl Daw {
 	}
 
 	fn has_unsaved_changes(&mut self) -> bool {
+		let current = self.serialize_project();
 		self.saved_project
 			.as_ref()
-			.is_none_or(|saved| *saved != self.serialize_project())
+			.is_none_or(|saved| *saved != current)
 	}
 
 	fn perform_pending_action(&mut self, action: PendingAction) -> Task<Message> {
