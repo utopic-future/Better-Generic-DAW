@@ -686,12 +686,12 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 
 		layout
 			.children()
-			.map(|layout| layout.children().enumerate())
 			.enumerate()
-			.for_each(|(track, children)| {
+			.filter(|(_, track_layout)| track_layout.bounds().intersects(viewport))
+			.for_each(|(track, track_layout)| {
 				active.clear();
 
-				for (clip, layout) in children {
+				for (clip, layout) in track_layout.children().enumerate() {
 					let Some(bounds) = layout.bounds().intersection(viewport) else {
 						continue;
 					};
