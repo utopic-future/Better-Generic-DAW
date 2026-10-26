@@ -841,16 +841,22 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 			Status::DraggingVolume(..) => Interaction::ResizingVertically,
 			Status::FadingStartLen(..) | Status::FadingEndLen(..) => Interaction::Pointer,
 			Status::FadingStartP(..) | Status::FadingEndP(..) => Interaction::Crosshair,
-			Status::None => self
-				.tracks
-				.iter()
-				.zip(&tree.children)
-				.zip(layout.children())
-				.map(|((child, tree), layout)| {
-					child.mouse_interaction(tree, layout, cursor, viewport, renderer)
-				})
-				.find(|&i| i != Interaction::default())
-				.unwrap_or_default(),
+			Status::None => {
+				let Some(position) = cursor.position_from(layout.position()) else {
+					return Interaction::default();
+				};
+				let Some(track) = track_index(&layout, position) else {
+					return Interaction::default();
+				};
+
+				self.tracks[track].mouse_interaction(
+					&tree.children[track],
+					layout.child(track),
+					cursor,
+					viewport,
+					renderer,
+				)
+			}
 		}
 	}
 
