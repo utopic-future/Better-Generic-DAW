@@ -1,8 +1,7 @@
 use crate::{config::PLUGIN_MEMORY_PATH, plugin_descriptor::PluginDescriptor};
 use generic_daw_core::{
 	clap_host::{self, Capability, Category, Feature, Subcategory},
-	vst2_host,
-	vst3_host,
+	vst2_host, vst3_host,
 };
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
@@ -207,10 +206,7 @@ impl PluginMemory {
 			}
 		};
 
-		info!(
-			"loaded plugin memory with {} plugins",
-			read.plugins.len()
-		);
+		info!("loaded plugin memory with {} plugins", read.plugins.len());
 
 		read
 	}
@@ -493,8 +489,18 @@ mod tests {
 
 		memory.finish_scan(&index);
 
-		assert!(!memory.entry(&PluginKey::from_descriptor(&found)).unwrap().missing);
-		assert!(memory.entry(&PluginKey::from_descriptor(&missing)).unwrap().missing);
+		assert!(
+			!memory
+				.entry(&PluginKey::from_descriptor(&found))
+				.unwrap()
+				.missing
+		);
+		assert!(
+			memory
+				.entry(&PluginKey::from_descriptor(&missing))
+				.unwrap()
+				.missing
+		);
 	}
 
 	#[test]
@@ -611,6 +617,9 @@ mod tests {
 		assert!(read.is_favorite(&key));
 		assert_eq!(read.recent, vec![key.clone()]);
 		assert_eq!(read.entry(&key).unwrap().use_count, 1);
-		assert_eq!(read.entry(&key).unwrap().descriptor().unwrap().name(), "plugin");
+		assert_eq!(
+			read.entry(&key).unwrap().descriptor().unwrap().name(),
+			"plugin"
+		);
 	}
 }

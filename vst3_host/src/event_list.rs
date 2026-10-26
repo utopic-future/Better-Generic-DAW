@@ -100,7 +100,9 @@ impl IEventListTrait for EventList {
 		let event = unsafe { (&*self.events.get())[idx] };
 
 		// SAFETY: e is non-null and points to an Event.
-		unsafe { *e = event; }
+		unsafe {
+			*e = event;
+		}
 		kResultOk
 	}
 

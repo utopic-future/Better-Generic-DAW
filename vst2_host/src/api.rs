@@ -261,9 +261,14 @@ pub const MAX_PROGRAM_NAME_LEN: usize = 24;
 pub const MAX_PARAM_STR_LEN: usize = 32;
 
 /// The function the plugin uses to call the host.
-pub type HostCallback =
-	extern "C" fn(effect: *mut AEffect, opcode: i32, index: i32, value: isize, ptr: *mut c_void, opt: f32)
-	-> isize;
+pub type HostCallback = extern "C" fn(
+	effect: *mut AEffect,
+	opcode: i32,
+	index: i32,
+	value: isize,
+	ptr: *mut c_void,
+	opt: f32,
+) -> isize;
 
 /// The function the host uses to call the plugin.
 pub type Dispatcher = unsafe extern "C" fn(
@@ -381,7 +386,10 @@ pub struct MidiEvent {
 /// An event, of any kind.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-#[expect(clippy::struct_field_names, reason = "the names are the ones the API uses")]
+#[expect(
+	clippy::struct_field_names,
+	reason = "the names are the ones the API uses"
+)]
 pub struct Event {
 	/// The kind of event, see [`event_types`].
 	pub event_type: i32,
@@ -398,7 +406,10 @@ pub struct Event {
 /// The events of a block.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-#[expect(clippy::struct_field_names, reason = "the names are the ones the API uses")]
+#[expect(
+	clippy::struct_field_names,
+	reason = "the names are the ones the API uses"
+)]
 pub struct Events {
 	/// The number of events.
 	pub num_events: i32,

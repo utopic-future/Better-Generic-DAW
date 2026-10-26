@@ -743,10 +743,10 @@ fn save_plugin(
 			plugin.active,
 		),
 		PluginDescriptor::Vst2(descriptor) => proto::Plugin::vst2(
-				descriptor.unique_id,
-				vst2_host.get_state(plugin.id),
-				plugin.mix,
-				plugin.active,
+			descriptor.unique_id,
+			vst2_host.get_state(plugin.id),
+			plugin.mix,
+			plugin.active,
 		),
 		PluginDescriptor::Vst3(descriptor) => proto::Plugin::vst3(
 			descriptor.id,

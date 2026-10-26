@@ -29,7 +29,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Track<'a, Message> {
 	fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &Limits) -> Node {
 		let _viewport_x = 0.0; // Will be set properly by parent
 		let _viewport_width = limits.max().width;
-		
+
 		Node::with_children(
 			limits.max(),
 			self.clips
@@ -56,7 +56,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Track<'a, Message> {
 		// Compute visible clip range based on viewport
 		let viewport_left = viewport.x - layout.position().x;
 		let viewport_right = viewport_left + viewport.width;
-		
+
 		for (i, ((child, tree), clip_layout)) in self
 			.clips
 			.iter_mut()
@@ -70,7 +70,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Track<'a, Message> {
 			if clip_bounds.x + clip_bounds.width < viewport_left || clip_bounds.x > viewport_right {
 				continue;
 			}
-			
+
 			child.update(tree, event, clip_layout, cursor, renderer, shell, viewport);
 
 			if i != 0
@@ -106,7 +106,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Track<'a, Message> {
 	) -> Interaction {
 		let viewport_left = viewport.x - layout.position().x;
 		let viewport_right = viewport_left + viewport.width;
-		
+
 		self.clips
 			.iter()
 			.zip(&tree.children)
@@ -114,7 +114,9 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Track<'a, Message> {
 			.filter_map(|((child, tree), clip_layout)| {
 				// Skip clips outside horizontal viewport
 				let clip_bounds = clip_layout.bounds();
-				if clip_bounds.x + clip_bounds.width < viewport_left || clip_bounds.x > viewport_right {
+				if clip_bounds.x + clip_bounds.width < viewport_left
+					|| clip_bounds.x > viewport_right
+				{
 					return None;
 				}
 				Some(child.mouse_interaction(tree, clip_layout, cursor, viewport, renderer))
@@ -133,7 +135,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Track<'a, Message> {
 	) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
 		let viewport_left = viewport.x - layout.position().x;
 		let viewport_right = viewport_left + viewport.width;
-		
+
 		let children = self
 			.clips
 			.iter_mut()
@@ -142,7 +144,9 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Track<'a, Message> {
 			.filter_map(|((child, tree), clip_layout)| {
 				// Skip clips outside horizontal viewport
 				let clip_bounds = clip_layout.bounds();
-				if clip_bounds.x + clip_bounds.width < viewport_left || clip_bounds.x > viewport_right {
+				if clip_bounds.x + clip_bounds.width < viewport_left
+					|| clip_bounds.x > viewport_right
+				{
 					return None;
 				}
 				child.overlay(tree, clip_layout, renderer, viewport, translation)

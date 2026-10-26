@@ -190,7 +190,7 @@ impl<Node: NodeImpl> AudioGraph<Node> {
 
 			if latency_diff == 0 {
 				let src = &dep_buffers.audio[..self.curr_len];
-				
+
 				if buffers_init {
 					// Mix: dst = dst + src * mix
 					#[cfg(feature = "simd")]
@@ -215,7 +215,7 @@ impl<Node: NodeImpl> AudioGraph<Node> {
 				// Need delay line - use scratch buffer
 				let audio = Node::get_scratch_audio(scratch);
 				let src_scratch = &mut audio[..self.curr_len];
-				
+
 				// Copy to scratch
 				#[cfg(feature = "simd")]
 				simd::copy_to_scratch_sse2(src_scratch, &dep_buffers.audio[..self.curr_len]);
@@ -225,7 +225,7 @@ impl<Node: NodeImpl> AudioGraph<Node> {
 					src_scratch[i][1] = dep_buffers.audio[i][1];
 				}
 				delay_line.advance_mut(src_scratch);
-				
+
 				if buffers_init {
 					#[cfg(feature = "simd")]
 					simd::mix_scratch_sse2(dst, src_scratch, mix_val);

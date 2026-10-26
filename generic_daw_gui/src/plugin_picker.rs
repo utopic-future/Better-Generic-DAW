@@ -168,7 +168,8 @@ impl State {
 
 	/// Records that a plugin was loaded.
 	pub fn mark_used(&mut self, descriptor: &PluginDescriptor) {
-		self.memory.mark_used(&PluginKey::from_descriptor(descriptor));
+		self.memory
+			.mark_used(&PluginKey::from_descriptor(descriptor));
 	}
 
 	/// Adds the plugin to the favorites, or takes it out of them. Tells whether the
@@ -383,7 +384,11 @@ impl PluginPicker {
 						column(
 							self.filtered_options
 								.iter()
-								.map(|&option| (option, &state.options[option], &state.keys[option]))
+								.map(|&option| (
+									option,
+									&state.options[option],
+									&state.keys[option]
+								))
 								.enumerate()
 								.map(|(i, (option, descriptor, key))| {
 									let favorite = state.memory.is_favorite(key);
@@ -403,15 +408,21 @@ impl PluginPicker {
 														text(descriptor.name())
 															.wrapping(text::Wrapping::None)
 															.ellipsis(text::Ellipsis::End),
-														text(descriptor.version().unwrap_or_default())
-															.wrapping(text::Wrapping::None)
-															.ellipsis(text::Ellipsis::End)
-															.style(text::secondary)
-															.width(Fill),
-														text(descriptor.vendor().unwrap_or_default())
-															.wrapping(text::Wrapping::None)
-															.ellipsis(text::Ellipsis::Start)
-															.style(text::secondary),
+														text(
+															descriptor
+																.version()
+																.unwrap_or_default()
+														)
+														.wrapping(text::Wrapping::None)
+														.ellipsis(text::Ellipsis::End)
+														.style(text::secondary)
+														.width(Fill),
+														text(
+															descriptor.vendor().unwrap_or_default()
+														)
+														.wrapping(text::Wrapping::None)
+														.ellipsis(text::Ellipsis::Start)
+														.style(text::secondary),
 														text(descriptor.format())
 															.wrapping(text::Wrapping::None)
 															.style(text::secondary),
@@ -445,7 +456,10 @@ impl PluginPicker {
 													.on_press(Message::ToggleFavorite(option)),
 												)
 												.width(200)
-												.style(container_with_radius(weaker_bordered_box, 5))
+												.style(container_with_radius(
+													weaker_bordered_box,
+													5,
+												))
 												.into()
 											},
 										)
@@ -520,9 +534,7 @@ impl PluginPicker {
 							.iter()
 							.any(|&subcategory| descriptor.in_subcategory(subcategory))
 				})
-				.filter(|(i, _)| {
-					!self.favorites_only || state.memory.is_favorite(&state.keys[*i])
-				})
+				.filter(|(i, _)| !self.favorites_only || state.memory.is_favorite(&state.keys[*i]))
 				.filter(|(_, (_, (name, vendor)))| {
 					query.iter().all(|word| {
 						name.contains(word)
@@ -689,9 +701,17 @@ mod tests {
 		state.add(descriptor.clone(), None);
 
 		assert!(state.toggle_favorite(0));
-		assert!(state.memory.is_favorite(&PluginKey::from_descriptor(&descriptor)));
+		assert!(
+			state
+				.memory
+				.is_favorite(&PluginKey::from_descriptor(&descriptor))
+		);
 		assert!(!state.toggle_favorite(0));
-		assert!(!state.memory.is_favorite(&PluginKey::from_descriptor(&descriptor)));
+		assert!(
+			!state
+				.memory
+				.is_favorite(&PluginKey::from_descriptor(&descriptor))
+		);
 	}
 
 	#[test]

@@ -20,7 +20,10 @@ fn main() {
 	let found = if args.is_empty() {
 		find_plugin_paths(DEFAULT_VST2_PATHS.iter()).collect::<Vec<_>>()
 	} else {
-		args.iter().map(std::path::PathBuf::from).map(Arc::from).collect()
+		args.iter()
+			.map(std::path::PathBuf::from)
+			.map(Arc::from)
+			.collect()
 	};
 
 	println!("{} files found", found.len());

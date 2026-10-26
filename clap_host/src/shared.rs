@@ -132,7 +132,14 @@ impl HostGuiImpl for Shared<'_> {
 	fn resize_hints_changed(&self) {}
 
 	fn request_resize(&self, GuiSize { width, height }: GuiSize) -> Result<(), HostError> {
-		if self.sender.send(MainThreadMessage::GuiRequestResize(Size::from_native((width as f32, height as f32)))).is_err() {
+		if self
+			.sender
+			.send(MainThreadMessage::GuiRequestResize(Size::from_native((
+				width as f32,
+				height as f32,
+			))))
+			.is_err()
+		{
 			return Err(HostError::Message("failed to send gui request resize"));
 		}
 		Ok(())

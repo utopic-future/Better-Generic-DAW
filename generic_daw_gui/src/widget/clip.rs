@@ -644,7 +644,8 @@ impl<Message> Widget<Message, Theme, Renderer> for Clip<'_, Message> {
 
 		match self.inner {
 			Inner::AudioClip(inner) => {
-				if mesh_cache.is_empty() && MeshBudget::try_consume()
+				if mesh_cache.is_empty()
+					&& MeshBudget::try_consume()
 					&& let Some(mesh) = debug::time_with("Waveform", || {
 						let resample_ratio = inner.sample.resample_ratio(self.transport);
 						inner.sample.lods.mesh(

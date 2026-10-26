@@ -1,7 +1,6 @@
 use generic_daw_core::{
 	clap_host::{self, Category, Feature, Subcategory},
-	vst2_host,
-	vst3_host,
+	vst2_host, vst3_host,
 };
 use std::path::Path;
 use std::sync::Arc;

@@ -778,9 +778,7 @@ impl ConfigView {
 			button(x())
 				.style(button_with_radius(button::danger, 5))
 				.padding(0)
-				.on_press_maybe(
-					(!chords.is_empty()).then_some(Message::UnbindShortcut(action))
-				),
+				.on_press_maybe((!chords.is_empty()).then_some(Message::UnbindShortcut(action))),
 			button(rotate_ccw())
 				.style(button_with_radius(button::primary, 5))
 				.padding(0)

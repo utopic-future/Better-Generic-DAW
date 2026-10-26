@@ -161,8 +161,16 @@ impl Node {
 		});
 
 		items.push(MenuItem::Action {
-			icon: Some(if self.enabled { volume_2() } else { volume_off() }),
-			label: if self.enabled { "Mute".into() } else { "Unmute".into() },
+			icon: Some(if self.enabled {
+				volume_2()
+			} else {
+				volume_off()
+			}),
+			label: if self.enabled {
+				"Mute".into()
+			} else {
+				"Unmute".into()
+			},
 			shortcut: shortcuts.label(ShortcutAction::ToggleEnabled),
 			message: match self.ty {
 				NodeType::Track => Message::TrackToggleEnabled(self.id),

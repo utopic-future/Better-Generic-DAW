@@ -34,7 +34,8 @@ fn main() -> Result {
 	// The program can be told to look for VST2 plugins instead of starting. That's how
 	// the plugins are found: some of them crash when they're made, and a crash takes the
 	// whole program with it.
-	if let Some(paths) = generic_daw_core::vst2_host::scan::paths_from_args(std::env::args().skip(1))
+	if let Some(paths) =
+		generic_daw_core::vst2_host::scan::paths_from_args(std::env::args().skip(1))
 	{
 		generic_daw_core::vst2_host::scan::print_plugins(&paths);
 		return Ok(());

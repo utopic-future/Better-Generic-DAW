@@ -26,7 +26,7 @@ pub static DEFAULT_HOST: LazyLock<HostId> = LazyLock::new(|| cpal::default_host(
 fn flush_denormals(samples: &mut [f32]) {
 	#[cfg(target_arch = "x86_64")]
 	{
-		use std::arch::x86_64::{_mm_setcsr, _mm_getcsr, _MM_FLUSH_ZERO_ON};
+		use std::arch::x86_64::{_MM_FLUSH_ZERO_ON, _mm_getcsr, _mm_setcsr};
 		// Set FTZ (Flush To Zero) flag
 		// DAZ (Denormals Are Zero) might not be available on all CPUs/Rust versions
 		unsafe {
@@ -237,7 +237,9 @@ pub fn build_streams(
 		.filter(|sample_rate| {
 			output_device
 				.supported_output_configs()
-				.is_ok_and(|mut configs| configs.any(|config| config.contains_rate(sample_rate.get())))
+				.is_ok_and(|mut configs| {
+					configs.any(|config| config.contains_rate(sample_rate.get()))
+				})
 		})
 		.or_else(|| {
 			output_device
@@ -490,7 +492,9 @@ fn build_audio_output_stream(
 	let config = StreamConfig {
 		channels: channels.get(),
 		sample_rate: sample_rate.get(),
-		buffer_size: frames.map_or(BufferSize::Default, |frames| BufferSize::Fixed(frames.get())),
+		buffer_size: frames.map_or(BufferSize::Default, |frames| {
+			BufferSize::Fixed(frames.get())
+		}),
 	};
 
 	let frames = frames.or(NonZero::new(256)).unwrap();
@@ -564,6 +568,7 @@ fn build_audio_output_callback(
 
 	move |audio_out| {
 		for audio_out in audio_out.chunks_mut(chunk_size.get() as usize) {
+			audio_out.fill(0.0);   // add this
 			let frames = audio_out.len() / usize::from(output_channels.get());
 			let input_len = frames * usize::from(input_channels);
 

@@ -60,7 +60,9 @@ impl Node {
 	pub fn toggle_kind(&mut self, transport: &Transport) {
 		let this = std::mem::replace(
 			self,
-			Self::Channel(Channel::new(Channels::base(transport.output_channels.get()))),
+			Self::Channel(Channel::new(Channels::base(
+				transport.output_channels.get(),
+			))),
 		);
 		*self = match this {
 			Self::Channel(node) => Self::Track(Track::from_channel(

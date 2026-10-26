@@ -107,7 +107,9 @@ impl WorkingDirectory {
 	pub fn set(directory: Option<&Path>) -> Self {
 		static LOCK: Mutex<()> = Mutex::new(());
 
-		let lock = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+		let lock = LOCK
+			.lock()
+			.unwrap_or_else(std::sync::PoisonError::into_inner);
 		let previous = std::env::current_dir().ok();
 
 		if let Some(directory) = directory {
@@ -130,7 +132,8 @@ impl Drop for WorkingDirectory {
 }
 
 #[cfg(windows)]
-mod platform {	use super::{Error, Library, MainCall};
+mod platform {
+	use super::{Error, Library, MainCall};
 	use std::{
 		path::{Path, PathBuf},
 		sync::Arc,
@@ -200,8 +203,8 @@ mod platform {
 		};
 
 		// SAFETY: loading an external library object file is inherently unsafe.
-		let library = unsafe { Library::new(&binary) }
-			.map_err(|err| Error::Load(path.clone(), err))?;
+		let library =
+			unsafe { Library::new(&binary) }.map_err(|err| Error::Load(path.clone(), err))?;
 
 		// SAFETY: the library is loaded, and this is the entry point of a VST2 plugin.
 		let main = unsafe { library.get::<MainCall>(b"main_macho\0") }
@@ -224,8 +227,8 @@ mod platform {
 
 	pub fn open(path: &Arc<Path>) -> Result<(Library, MainCall), Error> {
 		// SAFETY: loading an external library object file is inherently unsafe.
-		let library = unsafe { Library::new(path) }
-			.map_err(|err| Error::Load(path.clone(), err))?;
+		let library =
+			unsafe { Library::new(path) }.map_err(|err| Error::Load(path.clone(), err))?;
 
 		// SAFETY: the library is loaded, and this is the entry point of a VST2 plugin.
 		let main = unsafe { library.get::<MainCall>(b"VSTPluginMain\0") }

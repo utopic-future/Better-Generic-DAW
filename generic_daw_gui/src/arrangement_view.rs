@@ -8,8 +8,8 @@ use crate::{
 	icons::{
 		arrow_left_right, arrow_up_down, check, chevron_down, chevron_up,
 		chevrons_left_right_ellipsis, circle_ellipsis, clipboard_paste, copy, flip_horizontal,
-		gauge, grip_horizontal, grip_vertical, keyboard_music, magnet, midi_port, plus, power,
-		music_2, power_off, repeat as repeat_icon, rotate_ccw, sliders_vertical, snowflake,
+		gauge, grip_horizontal, grip_vertical, keyboard_music, magnet, midi_port, music_2, plus,
+		power, power_off, repeat as repeat_icon, rotate_ccw, sliders_vertical, snowflake,
 		square_split_horizontal, trash_2, volume_2, x,
 	},
 	operation::scroll_into_view,
@@ -26,7 +26,8 @@ use crate::{
 	vst3_host::Vst3Host,
 	widget::{
 		Clip, Delta, LINE_HEIGHT, Note, Piano, PianoRoll, Playlist, Seeker, TEXT_HEIGHT, Track,
-		frames_per_px, piano_roll, playlist::{self, ContextTarget},
+		frames_per_px, piano_roll,
+		playlist::{self, ContextTarget},
 	},
 };
 use generic_daw_core::{
@@ -1386,8 +1387,8 @@ impl ArrangementView {
 					&mut self.history,
 					clips,
 					|arrangement, track, clip| {
-						let pos = arrangement.tracks()[track].clips[clip]
-							.end(arrangement.transport());
+						let pos =
+							arrangement.tracks()[track].clips[clip].end(arrangement.transport());
 						arrangement.clip_trim_end_to(track, clip, pos + pos_diff);
 					},
 				);
@@ -1528,8 +1529,8 @@ impl ArrangementView {
 					&mut self.history,
 					clips,
 					|arrangement, track, clip| {
-						let pos = arrangement.tracks()[track].clips[clip]
-							.end(arrangement.transport());
+						let pos =
+							arrangement.tracks()[track].clips[clip].end(arrangement.transport());
 						arrangement.clip_stretch_end_to(track, clip, pos + pos_diff);
 					},
 				);
@@ -1632,8 +1633,8 @@ impl ArrangementView {
 					&mut self.history,
 					clips,
 					|arrangement, track, clip| {
-						let pos = arrangement.tracks()[track].clips[clip]
-							.offset(arrangement.transport());
+						let pos =
+							arrangement.tracks()[track].clips[clip].offset(arrangement.transport());
 						arrangement.clip_slip_to(track, clip, pos + pos_diff);
 					},
 				);
@@ -1799,8 +1800,8 @@ impl ArrangementView {
 						.note_move_to(clip.pattern, note, pos + pos_diff);
 
 					let key = self.arrangement.midi_patterns()[&clip.pattern].notes[note].key;
-					let velocity = self.arrangement.midi_patterns()[&clip.pattern].notes[note]
-						.velocity;
+					let velocity =
+						self.arrangement.midi_patterns()[&clip.pattern].notes[note].velocity;
 					let new_key = key + key_diff;
 
 					self.arrangement
@@ -1821,9 +1822,7 @@ impl ArrangementView {
 					Delta::Positive(diff) | Delta::Negative(diff) => diff.0 != 0,
 				};
 
-				if key_changed
-					&& let Some((key, velocity)) = preview
-				{
+				if key_changed && let Some((key, velocity)) = preview {
 					self.preview_midi_note(key, velocity);
 				}
 			}
@@ -2434,7 +2433,11 @@ impl ArrangementView {
 											]
 											.padding(padding::all(5).left(0))
 											.spacing(5),
-											|| node.main_context_menu(Tab::Playlist, &state.shortcuts, Vec::new())
+											|| node.main_context_menu(
+												Tab::Playlist,
+												&state.shortcuts,
+												Vec::new()
+											)
 										))
 										.interaction(Interaction::Pointer)
 									)
@@ -2717,19 +2720,30 @@ impl ArrangementView {
 												icon: Some(clipboard_paste()),
 												label: "Paste state".into(),
 												shortcut: String::new(),
-												message: Message::PluginPasteState(self.selected, i),
+												message: Message::PluginPasteState(
+													self.selected,
+													i,
+												),
 											},
 											MenuItem::Action {
 												icon: Some(rotate_ccw()),
 												label: "Reset mix".into(),
 												shortcut: "Ctrl-Click".into(),
-												message: Message::PluginMixChanged(self.selected, i, 1.0),
+												message: Message::PluginMixChanged(
+													self.selected,
+													i,
+													1.0,
+												),
 											},
 											MenuItem::Action {
 												icon: Some(arrow_up_down()),
 												label: "Invert polarity".into(),
 												shortcut: String::new(),
-												message: Message::PluginMixChanged(self.selected, i, -plugin.mix),
+												message: Message::PluginMixChanged(
+													self.selected,
+													i,
+													-plugin.mix,
+												),
 											},
 											MenuItem::Action {
 												icon: Some(trash_2()),
@@ -3117,7 +3131,11 @@ impl ArrangementView {
 						.align_x(Center)
 						.padding(5)
 						.spacing(5),
-						|| node.main_context_menu(Tab::Mixer, &state.shortcuts, self.route_items(node))
+						|| node.main_context_menu(
+							Tab::Mixer,
+							&state.shortcuts,
+							self.route_items(node)
+						)
 					))
 					.interaction(Interaction::Pointer)
 				)

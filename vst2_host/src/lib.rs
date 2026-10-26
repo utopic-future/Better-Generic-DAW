@@ -9,12 +9,12 @@
 //! the audio thread has it process audio.
 
 use crate::{api::AEffect, host::HostState};
-use util::{c_array_to_string, non_empty};
 use std::{
 	ffi::c_void,
 	path::{Path, PathBuf},
 	sync::{Arc, LazyLock, mpsc},
 };
+use util::{c_array_to_string, non_empty};
 use walkdir::WalkDir;
 
 mod audio_buffers;
@@ -283,6 +283,8 @@ fn null() -> *mut c_void {
 }
 
 /// Loads a plugin, and creates an instance of it.
-pub fn load(descriptor: &PluginDescriptor) -> Result<(Plugin, mpsc::Receiver<MainThreadMessage>), Error> {
+pub fn load(
+	descriptor: &PluginDescriptor,
+) -> Result<(Plugin, mpsc::Receiver<MainThreadMessage>), Error> {
 	Plugin::new(descriptor)
 }

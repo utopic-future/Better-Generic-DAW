@@ -26,10 +26,7 @@ const HOST_API_VERSION: isize = 2400;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MainThreadMessage {
 	/// The plugin wants its window to be a different size.
-	ResizeEditor {
-		width: i32,
-		height: i32,
-	},
+	ResizeEditor { width: i32, height: i32 },
 }
 
 /// The id of the plugin that's being created.
@@ -137,14 +134,20 @@ impl HostState {
 
 	/// The parameters the plugin changed on its own, and forgets them.
 	pub fn take_param_updates(&self) -> Vec<(u32, f32)> {
-		let mut updates = self.param_updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+		let mut updates = self
+			.param_updates
+			.lock()
+			.unwrap_or_else(std::sync::PoisonError::into_inner);
 
 		std::mem::take(&mut *updates)
 	}
 
 	/// The notes the plugin played, and forgets them.
 	pub fn take_output_events(&self) -> Vec<Event> {
-		let mut events = self.output_events.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+		let mut events = self
+			.output_events
+			.lock()
+			.unwrap_or_else(std::sync::PoisonError::into_inner);
 
 		std::mem::take(&mut *events)
 	}
@@ -166,14 +169,20 @@ impl HostState {
 			return;
 		}
 
-		let mut updates = self.param_updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+		let mut updates = self
+			.param_updates
+			.lock()
+			.unwrap_or_else(std::sync::PoisonError::into_inner);
 
 		updates.push((index as u32, value));
 	}
 
 	/// Tells the main thread that the plugin wants a different window size.
 	fn resize_editor(&self, width: i32, height: i32) {
-		let sender = self.sender.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+		let sender = self
+			.sender
+			.lock()
+			.unwrap_or_else(std::sync::PoisonError::into_inner);
 
 		if let Some(sender) = sender.as_ref() {
 			let _ = sender.send(MainThreadMessage::ResizeEditor { width, height });
@@ -194,7 +203,10 @@ impl HostState {
 		// SAFETY: the header is followed by the pointers to the events.
 		let pointers = unsafe { events.cast::<*mut api::Event>().add(2) };
 
-		let mut output = self.output_events.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+		let mut output = self
+			.output_events
+			.lock()
+			.unwrap_or_else(std::sync::PoisonError::into_inner);
 
 		for index in 0..count {
 			// SAFETY: the plugin says how many events there are, and they are valid

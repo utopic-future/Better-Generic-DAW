@@ -428,7 +428,16 @@ impl Vst3Host {
 					return Action::none();
 				};
 
-				return match hosted.plugin.restart(audio) {
+				// the engine may have a new sample rate or block size
+				let config = AudioConfig {
+					sample_rate: f64::from(transport.sample_rate.get()),
+					max_frames: transport.frames.get(),
+					offline: audio.config().offline,
+				};
+
+				hosted.plugin.deactivate(audio);
+
+				return match hosted.plugin.activate(config) {
 					Ok(audio) => {
 						let params = hosted.plugin.params().len();
 						Action::instruction(daw::Instruction::Vst3PluginRestart(

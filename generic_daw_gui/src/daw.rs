@@ -6,9 +6,9 @@ use crate::{
 	config_view::{self, ConfigView},
 	file_tree::{self, FileKind, FileTree},
 	icons::{
-		arrow_big_right, chart_no_axes_gantt, cpu, file, folder_open, gavel, history, keyboard_music,
-		magnet, menu as menu_icon, metronome, midi_port, panel_bottom_dashed, pause, play, plus,
-		save, settings, sliders_vertical, square,
+		arrow_big_right, chart_no_axes_gantt, cpu, file, folder_open, gavel, history,
+		keyboard_music, magnet, menu as menu_icon, metronome, midi_port, panel_bottom_dashed,
+		pause, play, plus, save, settings, sliders_vertical, square,
 	},
 	plugin_descriptor::PluginDescriptor,
 	plugin_memory::{PluginEntry, PluginMemory},
@@ -736,8 +736,11 @@ impl Daw {
 			Message::SaveAsFile(path) => {
 				if let Err(err) = std::fs::write(
 					&path,
-					self.arrangement_view
-						.save(&mut self.clap_host, &self.vst2_host, &self.vst3_host),
+					self.arrangement_view.save(
+						&mut self.clap_host,
+						&self.vst2_host,
+						&self.vst3_host,
+					),
 				) {
 					warn!("{err}");
 					return Task::none();
@@ -768,9 +771,11 @@ impl Daw {
 
 				let path =
 					Arc::<Path>::from(AUTOSAVED_DIR.join(format!("{} {}.gdp", name, format_now())));
-				let gdp = self
-					.arrangement_view
-					.save(&mut self.clap_host, &self.vst2_host, &self.vst3_host);
+				let gdp = self.arrangement_view.save(
+					&mut self.clap_host,
+					&self.vst2_host,
+					&self.vst3_host,
+				);
 
 				if let Some(last_path) = self
 					.state
@@ -966,7 +971,7 @@ impl Daw {
 
 				self.config = *config;
 				self.shortcuts = Manager::new(&self.config.shortcuts);
-			self.state.shortcuts = self.shortcuts.clone();
+				self.state.shortcuts = self.shortcuts.clone();
 				self.config.write();
 
 				return fut;
@@ -1019,16 +1024,16 @@ impl Daw {
 			}
 			Message::RescanPlugins => {
 				// Quick scan: only check if cached plugins still exist, and scan new directories
-				return self.quick_scan_plugins()
+				return self.quick_scan_plugins();
 			}
 			Message::FullRescanPlugins => {
 				// Full scan: scan all plugin directories from scratch
-				return self.full_scan_plugins()
+				return self.full_scan_plugins();
 			}
 			Message::GenerateMeshes => {
 				// Reset mesh budget at the start of each frame
 				crate::mesh_budget::MeshBudget::reset();
-				return Task::none()
+				return Task::none();
 			}
 			Message::FileHovered => self.files_hovered = true,
 			Message::FileDropped(path) => {
@@ -2048,18 +2053,17 @@ impl Daw {
 				Subscription::none()
 			},
 			if self.progress.is_none() {
-				keyboard::listen()
-					.filter_map(|event| match event {
-						keyboard::Event::KeyPressed {
-							key,
-							physical_key,
-							modifiers,
-							repeat,
-							..
-						} => Chord::from_event(&key, physical_key, modifiers)
-							.map(|chord| Message::Shortcut(chord, repeat)),
-						_ => None,
-					})
+				keyboard::listen().filter_map(|event| match event {
+					keyboard::Event::KeyPressed {
+						key,
+						physical_key,
+						modifiers,
+						repeat,
+						..
+					} => Chord::from_event(&key, physical_key, modifiers)
+						.map(|chord| Message::Shortcut(chord, repeat)),
+					_ => None,
+				})
 			} else {
 				Subscription::none()
 			},
@@ -2117,9 +2121,9 @@ impl Daw {
 		// the settings are in the way, so they get the key first
 		if let Some(config_view) = &mut self.config_view {
 			if config_view.is_recording() {
-				return Some(Message::ConfigView(
-					config_view::Message::ShortcutPressed(chord),
-				));
+				return Some(Message::ConfigView(config_view::Message::ShortcutPressed(
+					chord,
+				)));
 			}
 
 			let action = self.shortcuts.lookup(Context::Settings, &chord)?;
@@ -2186,7 +2190,8 @@ impl Daw {
 		// Add cached plugins immediately
 		for descriptor in &cached_descriptors {
 			self.plugins.record_scan(descriptor);
-			self.plugins.add(descriptor.clone(), self.plugin_picker.as_mut());
+			self.plugins
+				.add(descriptor.clone(), self.plugin_picker.as_mut());
 		}
 
 		// Find plugin paths from config and defaults
@@ -2196,10 +2201,9 @@ impl Daw {
 		return Task::batch([
 			Task::future(unblock(move || {
 				// Find all plugin paths
-				let clap_plugin_paths = clap_host::find_plugin_paths(
-					DEFAULT_CLAP_PATHS.iter().chain(&clap_paths),
-				)
-				.collect::<Box<_>>();
+				let clap_plugin_paths =
+					clap_host::find_plugin_paths(DEFAULT_CLAP_PATHS.iter().chain(&clap_paths))
+						.collect::<Box<_>>();
 				let vst2_plugin_paths = generic_daw_core::vst2_host::find_plugin_paths(
 					generic_daw_core::vst2_host::DEFAULT_VST2_PATHS.iter(),
 				)
@@ -2266,22 +2270,19 @@ impl Daw {
 
 				// The plugins are made in a program of its own, so that a plugin
 				// that crashes doesn't take this program with it.
-				generic_daw_core::vst2_host::scan::scan(
-					&new_vst2_paths,
-					|event| match event {
-						generic_daw_core::vst2_host::scan::Event::Scanning(path) => {
-							status(&path);
-						}
-						generic_daw_core::vst2_host::scan::Event::Found(descriptor) => {
-							sender
-								.try_send(Message::PluginScanned(
-									scan,
-									Box::new(PluginDescriptor::Vst2(descriptor)),
-								))
-								.unwrap();
-						}
-					},
-				);
+				generic_daw_core::vst2_host::scan::scan(&new_vst2_paths, |event| match event {
+					generic_daw_core::vst2_host::scan::Event::Scanning(path) => {
+						status(&path);
+					}
+					generic_daw_core::vst2_host::scan::Event::Found(descriptor) => {
+						sender
+							.try_send(Message::PluginScanned(
+								scan,
+								Box::new(PluginDescriptor::Vst2(descriptor)),
+							))
+							.unwrap();
+					}
+				});
 
 				done += new_vst2_paths.len();
 				if len > 0 {
@@ -2332,10 +2333,9 @@ impl Daw {
 
 		return Task::batch([
 			Task::future(unblock(move || {
-				let clap_plugin_paths = clap_host::find_plugin_paths(
-					DEFAULT_CLAP_PATHS.iter().chain(&clap_paths),
-				)
-				.collect::<Box<_>>();
+				let clap_plugin_paths =
+					clap_host::find_plugin_paths(DEFAULT_CLAP_PATHS.iter().chain(&clap_paths))
+						.collect::<Box<_>>();
 				let vst2_plugin_paths = generic_daw_core::vst2_host::find_plugin_paths(
 					generic_daw_core::vst2_host::DEFAULT_VST2_PATHS.iter(),
 				)
@@ -2381,22 +2381,19 @@ impl Daw {
 
 				// The plugins are made in a program of its own, so that a plugin
 				// that crashes doesn't take this program with it.
-				generic_daw_core::vst2_host::scan::scan(
-					&vst2_plugin_paths,
-					|event| match event {
-						generic_daw_core::vst2_host::scan::Event::Scanning(path) => {
-							status(&path);
-						}
-						generic_daw_core::vst2_host::scan::Event::Found(descriptor) => {
-							sender
-								.try_send(Message::PluginScanned(
-									scan,
-									Box::new(PluginDescriptor::Vst2(descriptor)),
-								))
-								.unwrap();
-						}
-					},
-				);
+				generic_daw_core::vst2_host::scan::scan(&vst2_plugin_paths, |event| match event {
+					generic_daw_core::vst2_host::scan::Event::Scanning(path) => {
+						status(&path);
+					}
+					generic_daw_core::vst2_host::scan::Event::Found(descriptor) => {
+						sender
+							.try_send(Message::PluginScanned(
+								scan,
+								Box::new(PluginDescriptor::Vst2(descriptor)),
+							))
+							.unwrap();
+					}
+				});
 
 				done += vst2_plugin_paths.len();
 				sender
@@ -2406,9 +2403,7 @@ impl Daw {
 				for path in vst3_plugin_paths {
 					status(&path);
 
-					if let Some(descriptors) =
-						generic_daw_core::vst3_host::descriptors(&path)
-					{
+					if let Some(descriptors) = generic_daw_core::vst3_host::descriptors(&path) {
 						for descriptor in descriptors {
 							sender
 								.try_send(Message::PluginScanned(

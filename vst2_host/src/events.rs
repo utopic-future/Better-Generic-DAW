@@ -14,11 +14,7 @@ pub enum Event {
 		velocity: f32,
 	},
 	/// A note ends.
-	NoteOff {
-		time: u32,
-		key: u8,
-		velocity: f32,
-	},
+	NoteOff { time: u32, key: u8, velocity: f32 },
 	/// Sets a parameter to a normalized value (`0.0..=1.0`).
 	ParamValue { time: u32, id: u32, value: f32 },
 }

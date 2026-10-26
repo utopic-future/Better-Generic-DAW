@@ -14,8 +14,7 @@ use crate::{
 	config::Config,
 	daw::{self, FREEZES_DIR, format_now},
 	plugin_descriptor::PluginDescriptor,
-	vst2_host,
-	vst3_host,
+	vst2_host, vst3_host,
 };
 use generic_daw_core::{
 	AudioClip, AudioPreview, AudioProcessor, AudioThread, Batch, Channels, Clip, ClipId, Message,
@@ -515,7 +514,12 @@ impl Arrangement {
 			let id = self.nodes[&id].plugins[index].id;
 			Task::batch([
 				Task::perform(receiver, move |message| {
-					clap_host::Message::AudioThread(id, NoClone(Box::new(message.expect("audio thread message channel closed in plugin_restart"))))
+					clap_host::Message::AudioThread(
+						id,
+						NoClone(Box::new(message.expect(
+							"audio thread message channel closed in plugin_restart",
+						))),
+					)
 				}),
 				Task::run(poll_consumer(consumer), move |(param_id, value)| {
 					clap_host::Message::PluginParamValueChange(id, param_id, value)
@@ -548,7 +552,12 @@ impl Arrangement {
 		let id = self.nodes[&id].plugins[index].id;
 		Task::batch([
 			Task::perform(receiver, move |message| {
-				clap_host::Message::AudioThread(id, NoClone(Box::new(message.expect("audio thread message channel closed in plugin_activate"))))
+				clap_host::Message::AudioThread(
+					id,
+					NoClone(Box::new(message.expect(
+						"audio thread message channel closed in plugin_activate",
+					))),
+				)
 			}),
 			Task::run(poll_consumer(consumer), move |(param_id, value)| {
 				clap_host::Message::PluginParamValueChange(id, param_id, value)
@@ -930,7 +939,8 @@ impl Arrangement {
 	}
 
 	pub fn duplicate_channel(&mut self, id: NodeId) -> (NodeId, Vec<daw::Instruction>) {
-		let new_id = self.insert_channel(self.channel_of(id).expect("channel not found in duplicate") + 1);
+		let new_id =
+			self.insert_channel(self.channel_of(id).expect("channel not found in duplicate") + 1);
 		let instructions = self.copy_node(id, new_id);
 		(new_id, instructions)
 	}
@@ -1097,7 +1107,11 @@ impl Arrangement {
 
 	pub fn set_mix(&mut self, from: NodeId, to: NodeId, mix: f32) {
 		if self.node(from).outgoing[&to] != mix {
-			*self.node_mut(from).outgoing.get_mut(&to).expect("mix not found") = mix;
+			*self
+				.node_mut(from)
+				.outgoing
+				.get_mut(&to)
+				.expect("mix not found") = mix;
 			self.send(Message::NodeSetMix(from, to, mix));
 		}
 	}
@@ -1571,11 +1585,7 @@ impl Arrangement {
 	}
 
 	pub fn remove_note(&mut self, pattern: MidiPatternId, note: usize) -> Option<MidiNote> {
-		let note = self
-			.midi_patterns
-			.get_mut(&pattern)?
-			.notes
-			.remove(note);
+		let note = self.midi_patterns.get_mut(&pattern)?.notes.remove(note);
 		self.midi_pattern_action(pattern, MidiPatternAction::Remove(note.id));
 		Some(note)
 	}
@@ -1616,10 +1626,7 @@ impl Arrangement {
 		}
 		if should_send {
 			if let Some(note_id) = note_id {
-				self.midi_pattern_action(
-					pattern,
-					MidiPatternAction::ChangeKey(note_id, key),
-				);
+				self.midi_pattern_action(pattern, MidiPatternAction::ChangeKey(note_id, key));
 			}
 		}
 	}
@@ -1638,10 +1645,7 @@ impl Arrangement {
 		}
 		if should_send {
 			if let Some(note_id) = note_id {
-				self.midi_pattern_action(
-					pattern,
-					MidiPatternAction::MoveTo(note_id, pos),
-				);
+				self.midi_pattern_action(pattern, MidiPatternAction::MoveTo(note_id, pos));
 			}
 		}
 	}
@@ -1660,10 +1664,7 @@ impl Arrangement {
 		}
 		if should_send {
 			if let Some(note_id) = note_id {
-				self.midi_pattern_action(
-					pattern,
-					MidiPatternAction::TrimStartTo(note_id, pos),
-				);
+				self.midi_pattern_action(pattern, MidiPatternAction::TrimStartTo(note_id, pos));
 			}
 		}
 	}
@@ -1682,10 +1683,7 @@ impl Arrangement {
 		}
 		if should_send {
 			if let Some(note_id) = note_id {
-				self.midi_pattern_action(
-					pattern,
-					MidiPatternAction::TrimEndTo(note_id, pos),
-				);
+				self.midi_pattern_action(pattern, MidiPatternAction::TrimEndTo(note_id, pos));
 			}
 		}
 	}
@@ -1733,13 +1731,21 @@ impl Arrangement {
 					beat_range,
 					|samples| {
 						for &[l, r] in samples {
-							if writer.write_sample(l).is_err() { warn!("failed to write sample"); }
-							if writer.write_sample(r).is_err() { warn!("failed to write sample"); }
+							if writer.write_sample(l).is_err() {
+								warn!("failed to write sample");
+							}
+							if writer.write_sample(r).is_err() {
+								warn!("failed to write sample");
+							}
 						}
 					},
-					|f| { let _ = progress_sender.force_send(f); },
+					|f| {
+						let _ = progress_sender.force_send(f);
+					},
 				);
-				if p_sender.send((PullSlot::Full(processor), pool)).is_err() { warn!("failed to send processor back"); }
+				if p_sender.send((PullSlot::Full(processor), pool)).is_err() {
+					warn!("failed to send processor back");
+				}
 				daw::Message::RenderedFile
 			}))
 			.discard(),
@@ -1803,9 +1809,13 @@ impl Arrangement {
 					node,
 					beat_range,
 					|samples| recording.recorded(samples),
-					|f| { let _ = progress_sender.force_send(f); },
+					|f| {
+						let _ = progress_sender.force_send(f);
+					},
 				);
-				if p_sender.send((PullSlot::Full(processor), pool)).is_err() { warn!("failed to send processor back"); }
+				if p_sender.send((PullSlot::Full(processor), pool)).is_err() {
+					warn!("failed to send processor back");
+				}
 
 				daw::Message::Arrangement(
 					project,
@@ -1834,7 +1844,9 @@ fn vst2_tasks(
 		Task::perform(receiver, move |message| {
 			daw::Message::Vst2Host(vst2_host::Message::AudioThread(
 				id,
-				NoClone(Box::new(message.expect("audio thread message channel closed in vst2_tasks"))),
+				NoClone(Box::new(
+					message.expect("audio thread message channel closed in vst2_tasks"),
+				)),
 			))
 		}),
 		Task::run(poll_consumer(consumer), move |(param_id, value)| {
@@ -1855,7 +1867,9 @@ fn vst3_tasks(
 		Task::perform(receiver, move |message| {
 			daw::Message::Vst3Host(vst3_host::Message::AudioThread(
 				id,
-				NoClone(Box::new(message.expect("audio thread message channel closed in vst3_tasks"))),
+				NoClone(Box::new(
+					message.expect("audio thread message channel closed in vst3_tasks"),
+				)),
 			))
 		}),
 		Task::run(poll_consumer(consumer), move |(param_id, value)| {

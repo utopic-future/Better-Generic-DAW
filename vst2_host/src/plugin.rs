@@ -278,9 +278,16 @@ impl Plugin {
 			return Err(Error::StateFailed("set up the audio"));
 		}
 
-		self.shared.state.set_config(config.sample_rate, config.max_frames, config.offline);
+		self.shared
+			.state
+			.set_config(config.sample_rate, config.max_frames, config.offline);
 
-		// The plugin has to know the sample rate and the block size before it's opened.
+		// the plugin has to be opened before it's told how it's set up
+		if !self.opened {
+			self.dispatch(api::opcodes::OPEN, 0, 0, null_mut(), 0.0);
+			self.opened = true;
+		}
+
 		self.dispatch(
 			api::opcodes::SET_SAMPLE_RATE,
 			0,
@@ -295,14 +302,8 @@ impl Plugin {
 			null_mut(),
 			0.0,
 		);
-
-		if !self.opened {
-			self.dispatch(api::opcodes::OPEN, 0, 0, null_mut(), 0.0);
-			self.opened = true;
-		}
-
+		self.dispatch(api::opcodes::MAINS_CHANGED, 0, 1, null_mut(), 0.0);
 		self.dispatch(api::opcodes::START_PROCESS, 0, 0, null_mut(), 0.0);
-
 		self.active = true;
 
 		// The plugin gets as many channels as it has, so that it doesn't read past the
@@ -328,6 +329,7 @@ impl Plugin {
 		if self.active {
 			self.active = false;
 			self.dispatch(api::opcodes::STOP_PROCESS, 0, 0, null_mut(), 0.0);
+			self.dispatch(api::opcodes::MAINS_CHANGED, 0, 0, null_mut(), 0.0);
 		}
 	}
 
@@ -383,13 +385,7 @@ impl Plugin {
 
 		let size = self.editor_size().ok_or(Error::NoEditor)?;
 
-		let result = self.dispatch(
-			api::opcodes::EDIT_OPEN,
-			0,
-			0,
-			parent.handle.cast(),
-			0.0,
-		);
+		let result = self.dispatch(api::opcodes::EDIT_OPEN, 0, 0, parent.handle.cast(), 0.0);
 
 		if result == 0 {
 			return Err(Error::EditorFailed);
@@ -489,13 +485,7 @@ impl Plugin {
 	fn get_chunk(&self) -> Result<Vec<u8>, Error> {
 		let mut data: *mut c_void = null_mut();
 
-		let size = self.dispatch(
-			api::opcodes::GET_CHUNK,
-			0,
-			0,
-			(&raw mut data).cast(),
-			0.0,
-		);
+		let size = self.dispatch(api::opcodes::GET_CHUNK, 0, 0, (&raw mut data).cast(), 0.0);
 
 		if size <= 0 || data.is_null() {
 			return Err(Error::StateFailed("save"));
@@ -503,7 +493,8 @@ impl Plugin {
 
 		// SAFETY: the plugin wrote `size` bytes at `data`, which are valid until the
 		// plugin is closed. The memory belongs to the plugin, so it's left alone.
-		let chunk = unsafe { std::slice::from_raw_parts(data.cast::<u8>(), size as usize) }.to_vec();
+		let chunk =
+			unsafe { std::slice::from_raw_parts(data.cast::<u8>(), size as usize) }.to_vec();
 
 		Ok(chunk)
 	}
@@ -550,8 +541,8 @@ impl Plugin {
 				0.0,
 			);
 
-			let automatable = self.dispatch(api::opcodes::CAN_BE_AUTOMATED, index, 0, null_mut(), 0.0)
-				!= 0;
+			let automatable =
+				self.dispatch(api::opcodes::CAN_BE_AUTOMATED, index, 0, null_mut(), 0.0) != 0;
 
 			// SAFETY: the properties are plain old data, and all zeroes is a valid value.
 			let mut properties: api::ParameterProperties =
@@ -620,14 +611,7 @@ impl Plugin {
 	}
 
 	/// Calls the plugin.
-	fn dispatch(
-		&self,
-		opcode: i32,
-		index: i32,
-		value: isize,
-		ptr: *mut c_void,
-		opt: f32,
-	) -> isize {
+	fn dispatch(&self, opcode: i32, index: i32, value: isize, ptr: *mut c_void, opt: f32) -> isize {
 		// SAFETY: the effect is a valid plugin.
 		let dispatcher = unsafe { (*self.shared.effect).dispatcher };
 

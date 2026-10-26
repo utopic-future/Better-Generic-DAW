@@ -268,10 +268,7 @@ chords = []
 
 		assert_eq!(read.shortcuts.bindings.len(), 2);
 
-		assert_eq!(
-			read.shortcuts.bindings[0].action,
-			Action::SaveFile,
-		);
+		assert_eq!(read.shortcuts.bindings[0].action, Action::SaveFile,);
 
 		assert_eq!(
 			read.shortcuts.bindings[0].chords,

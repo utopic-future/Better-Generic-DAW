@@ -1,10 +1,10 @@
 use crate::{
 	Channel, Channels, Clip, ClipId, Event, MidiKey, MidiNote, MidiNoteId, MidiPattern,
 	MidiPatternId, Node, NodeId, PanMode, Plugin, Point, PullSlot, PushSlot, Sample, SampleId,
-	ThreadPool, vst2_host,
+	ThreadPool,
 	time::{BeatRange, BeatTime, SecondsTime},
+	vst2_host,
 };
-use std::sync::atomic::{AtomicU8, Ordering};
 use audio_graph::{
 	self, AudioGraph,
 	thread_pool::{Injector, WorkList},
@@ -18,6 +18,7 @@ use log::{trace, warn};
 use midir::MidiOutputConnection;
 use midly::num::{u4, u7};
 use rtrb::{Consumer, Producer, PushError};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::{
 	any::Any,
 	collections::HashMap,
@@ -314,7 +315,12 @@ pub struct State {
 impl Default for State {
 	fn default() -> Self {
 		Self {
-			transport: Transport::new(0, NonZero::new(2).unwrap(), NonZero::new(48000).unwrap(), NonZero::new(256).unwrap()),
+			transport: Transport::new(
+				0,
+				NonZero::new(2).unwrap(),
+				NonZero::new(48000).unwrap(),
+				NonZero::new(256).unwrap(),
+			),
 			samples: HashMap::new(),
 			midi_patterns: HashMap::new(),
 			render_mode: RenderMode::Realtime,
@@ -516,23 +522,18 @@ impl AudioThread {
 		// Calculate output length: input_len / resample_ratio
 		let out_len = (click_len as f64 / resample_ratio).ceil() as usize;
 
-		let on_bar_resampled: Vec<[f32; 2]> = resample_cubic(
-			&ON_BAR_CLICK.as_chunks::<2>().0,
-			resample_ratio,
-			0,
-		)
-		.take(out_len)
-		.collect();
+		let on_bar_resampled: Vec<[f32; 2]> =
+			resample_cubic(&ON_BAR_CLICK.as_chunks::<2>().0, resample_ratio, 0)
+				.take(out_len)
+				.collect();
 
-		let off_bar_resampled: Vec<[f32; 2]> = resample_cubic(
-			&OFF_BAR_CLICK.as_chunks::<2>().0,
-			resample_ratio,
-			0,
-		)
-		.take(out_len)
-		.collect();
+		let off_bar_resampled: Vec<[f32; 2]> =
+			resample_cubic(&OFF_BAR_CLICK.as_chunks::<2>().0, resample_ratio, 0)
+				.take(out_len)
+				.collect();
 
-		self.metronome_cache.insert(sample_rate, (on_bar_resampled, off_bar_resampled));
+		self.metronome_cache
+			.insert(sample_rate, (on_bar_resampled, off_bar_resampled));
 	}
 
 	pub fn create_pool(&self) -> ThreadPool {
@@ -712,7 +713,8 @@ impl AudioThread {
 			match action.action {
 				MidiAction::NoteOn(channel, key, velocity) => {
 					let idx = channel.as_int() as usize * 128 + key.as_int() as usize;
-					let prev_velocity = self.state_mut().playing[idx].swap(velocity.as_int(), Ordering::Relaxed);
+					let prev_velocity =
+						self.state_mut().playing[idx].swap(velocity.as_int(), Ordering::Relaxed);
 					if prev_velocity != 0 {
 						self.state_mut().midi_input.push(TimedMidiAction {
 							ts: action.ts,
@@ -785,7 +787,7 @@ impl AudioThread {
 		self.load_frames += frames;
 
 		const MAX_UPDATE_BATCH_SIZE: usize = 256;
-const MAX_UPDATE_BUFFERS: usize = 4;
+		const MAX_UPDATE_BUFFERS: usize = 4;
 
 		if std::mem::take(&mut self.needs_update) || !self.updates.is_empty() {
 			// Bound the updates to prevent unbounded memory growth
@@ -840,10 +842,10 @@ const MAX_UPDATE_BUFFERS: usize = 4;
 		}
 
 		let sample_rate = self.transport().sample_rate.get();
-		
+
 		// Ensure metronome is resampled for current sample rate
 		self.resample_metronome(sample_rate);
-		
+
 		let (on_bar_click, off_bar_click) = match self.metronome_cache.get(&sample_rate) {
 			Some((on, off)) => (on, off),
 			None => return, // Should not happen after resample_metronome call
@@ -890,7 +892,10 @@ const MAX_UPDATE_BUFFERS: usize = 4;
 				.for_node_mut(self.master, |_, _, audio, _| {
 					let remaining = len - play_pos;
 					let copy_len = remaining.min(frames - write_start);
-					for (i, frame) in audio[write_start..write_start + copy_len].iter_mut().enumerate() {
+					for (i, frame) in audio[write_start..write_start + copy_len]
+						.iter_mut()
+						.enumerate()
+					{
 						let click_frame = click[play_pos + i];
 						frame[0] += click_frame[0];
 						frame[1] += click_frame[1];
@@ -914,7 +919,7 @@ const MAX_UPDATE_BUFFERS: usize = 4;
 
 				let resample_ratio = sample.resample_ratio(&state.transport);
 
-				resample_cubic(&sample.samples, resample_ratio, play_pos)
+				resample_cubic(&sample.samples, resample_ratio.recip(), play_pos)
 					.take(len - play_pos)
 					.zip(&mut audio[..frames])
 					.for_each(|([l, r], audio)| {

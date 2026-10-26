@@ -65,8 +65,8 @@ impl Transport {
 		};
 
 		// a bar is `numerator` beats, and a beat is `1 / denominator` of a whole note
-		let bar_length = f64::from(self.time_sig_numerator) * 4.0
-			/ f64::from(self.time_sig_denominator.max(1));
+		let bar_length =
+			f64::from(self.time_sig_numerator) * 4.0 / f64::from(self.time_sig_denominator.max(1));
 		info.bar_start_pos = (self.position_quarters / bar_length).floor() * bar_length;
 
 		if let Some((start, end)) = self.cycle {

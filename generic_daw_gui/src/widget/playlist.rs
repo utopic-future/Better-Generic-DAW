@@ -200,7 +200,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 		let track_height = state.scale.y;
 		let viewport_y = state.position.y;
 		let viewport_height = viewport.height;
-		
+
 		// Estimate visible track range
 		let first_visible_track = ((viewport_y / track_height) as usize).saturating_sub(1);
 		let visible_track_count = ((viewport_height / track_height).ceil() as usize) + 2;
@@ -364,12 +364,16 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 								clip::Inner::AudioClip(_) => ContextTarget::AudioClip(track, clip),
 								clip::Inner::MidiClip(_) => ContextTarget::MidiClip(track, clip),
 								clip::Inner::AudioRecording(..)
-								| clip::Inner::MidiRecording(..) => {
-									ContextTarget::EmptyTrack { track, time: new_time }
-								}
+								| clip::Inner::MidiRecording(..) => ContextTarget::EmptyTrack {
+									track,
+									time: new_time,
+								},
 							}
 						}
-						(None, Some(track)) => ContextTarget::EmptyTrack { track, time: new_time },
+						(None, Some(track)) => ContextTarget::EmptyTrack {
+							track,
+							time: new_time,
+						},
 						(None, None) => ContextTarget::EmptyArea { time: new_time },
 					});
 				}

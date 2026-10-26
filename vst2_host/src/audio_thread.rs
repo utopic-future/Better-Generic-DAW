@@ -1,9 +1,5 @@
 use crate::{
-	api,
-	audio_buffers::AudioBuffers,
-	events::Event,
-	plugin::Shared,
-	transport::Transport,
+	api, audio_buffers::AudioBuffers, events::Event, plugin::Shared, transport::Transport,
 };
 use std::{
 	mem::size_of,
@@ -165,7 +161,13 @@ impl AudioThread {
 			.position(|p| (p.event.time(), p.seq) > (event.time(), new_seq))
 			.unwrap_or(self.pending.len());
 
-		self.pending.insert(insert_idx, Pending { event, seq: new_seq });
+		self.pending.insert(
+			insert_idx,
+			Pending {
+				event,
+				seq: new_seq,
+			},
+		);
 		true
 	}
 

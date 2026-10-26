@@ -2,8 +2,7 @@ use crate::{clap_host::PluginId, daw, plugin_descriptor::PluginDescriptor, vst2_
 use generic_daw_core::{
 	PushSlot,
 	clap_host::{self, HostInfo},
-	vst2_host as vst2,
-	vst3_host as vst3,
+	vst2_host as vst2, vst3_host as vst3,
 };
 use std::sync::mpsc::Receiver;
 use utils::NoDebug;

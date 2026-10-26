@@ -151,8 +151,12 @@ fn max_peaks(audio: &[[f32; 2]]) -> [f32; 2] {
 		for &[l, r] in audio {
 			let l_abs = l.abs();
 			let r_abs = r.abs();
-			if l_abs > max_l { max_l = l_abs; }
-			if r_abs > max_r { max_r = r_abs; }
+			if l_abs > max_l {
+				max_l = l_abs;
+			}
+			if r_abs > max_r {
+				max_r = r_abs;
+			}
 		}
 		[max_l, max_r]
 	}

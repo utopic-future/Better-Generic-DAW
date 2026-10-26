@@ -136,12 +136,10 @@ pub fn menu_width<'a, Message: 'a + Clone>(
 	items: Vec<MenuItem<Message>>,
 	width: f32,
 ) -> Element<'a, Message> {
-	container(column(
-		items.into_iter().map(menu_item).collect::<Vec<_>>(),
-	))
-	.width(width)
-	.style(container_with_radius(weaker_bordered_box, 5))
-	.into()
+	container(column(items.into_iter().map(menu_item).collect::<Vec<_>>()))
+		.width(width)
+		.style(container_with_radius(weaker_bordered_box, 5))
+		.into()
 }
 
 /// One item of a menu.
@@ -159,20 +157,12 @@ pub fn menu_item<'a, Message: 'a + Clone>(item: MenuItem<Message>) -> Element<'a
 			shortcut,
 			is_on,
 			message,
-		} => menu_entry(
-			if is_on { Some(check()) } else { icon },
-			label,
-			shortcut,
-		)
-		.on_press(message)
-		.into(),
+		} => menu_entry(if is_on { Some(check()) } else { icon }, label, shortcut)
+			.on_press(message)
+			.into(),
 		MenuItem::Separator => menu_separator(),
 		MenuItem::Submenu { icon, label, items } => Submenu::new(
-			menu_row(
-				icon,
-				label,
-				right(chevron_right().size(TEXT_HEIGHT)),
-			),
+			menu_row(icon, label, right(chevron_right().size(TEXT_HEIGHT))),
 			move || menu(items.clone()),
 		)
 		.into(),

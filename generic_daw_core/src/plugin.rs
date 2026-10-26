@@ -6,10 +6,7 @@ use audio_graph::Injector;
 use clap_host::{AudioThread as ClapAudioThread, ClapId, RenderMode, events::EventFlags};
 use log::warn;
 use rtrb::{Consumer, Producer, RingBuffer};
-use std::{
-	collections::HashMap,
-	sync::atomic::AtomicBool,
-};
+use std::{collections::HashMap, sync::atomic::AtomicBool};
 use vst2_host::AudioThread as Vst2AudioThread;
 use vst3_host::{AudioThread as Vst3AudioThread, RestartFlags};
 

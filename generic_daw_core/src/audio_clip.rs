@@ -61,14 +61,24 @@ impl AudioClip {
 
 		// Stream directly from resampler into output - no intermediate Vec allocation
 		let mut resample_iter = resample_cubic(samples, resample_ratio, play_pos);
-		
-		for (i, frame) in audio[write_start..].iter_mut().enumerate().take(len - play_pos) {
-			let Some([l, r]) = resample_iter.next() else { break };
 
-			let mix = if i < fade_start {
-				self.fade_start.transition(i as f32 / fade_start as f32)
-			} else if i >= len - fade_end {
-				self.fade_end.transition((len - i) as f32 / fade_end as f32)
+		for (i, frame) in audio[write_start..]
+			.iter_mut()
+			.enumerate()
+			.take(len - play_pos)
+		{
+			let Some([l, r]) = resample_iter.next() else {
+				break;
+			};
+
+			// position in the clip, not in the block
+			let pos = play_pos + i;
+
+			let mix = if pos < fade_start {
+				self.fade_start.transition(pos as f32 / fade_start as f32)
+			} else if pos >= len.saturating_sub(fade_end) {
+				self.fade_end
+					.transition((len - pos) as f32 / fade_end as f32)
 			} else {
 				1.0
 			};

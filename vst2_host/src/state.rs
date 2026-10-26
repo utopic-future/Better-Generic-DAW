@@ -64,7 +64,9 @@ pub fn decode(blob: &[u8]) -> Result<State, Error> {
 	let param_count = u32::from_le_bytes(blob[12..16].try_into().unwrap()) as usize;
 	let chunk_len = u64::from_le_bytes(blob[16..24].try_into().unwrap()) as usize;
 
-	let params_len = param_count.checked_mul(4).ok_or(Error::InvalidState("too many parameters"))?;
+	let params_len = param_count
+		.checked_mul(4)
+		.ok_or(Error::InvalidState("too many parameters"))?;
 	let body = &blob[HEADER_LEN..];
 
 	if body.len() != params_len + chunk_len {

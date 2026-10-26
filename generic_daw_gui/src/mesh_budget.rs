@@ -12,21 +12,21 @@ static BUDGET_REMAINING: AtomicUsize = AtomicUsize::new(MESH_BUDGET_PER_FRAME);
 pub struct MeshBudget;
 
 impl MeshBudget {
-    /// Try to consume one unit of budget.
-    /// Returns true if budget was available, false if exhausted.
-    #[must_use]
-    pub fn try_consume() -> bool {
-        BUDGET_REMAINING.fetch_sub(1, Ordering::AcqRel) > 0
-    }
+	/// Try to consume one unit of budget.
+	/// Returns true if budget was available, false if exhausted.
+	#[must_use]
+	pub fn try_consume() -> bool {
+		BUDGET_REMAINING.fetch_sub(1, Ordering::AcqRel) > 0
+	}
 
-    /// Reset the budget to full at the start of a new frame.
-    pub fn reset() {
-        BUDGET_REMAINING.store(MESH_BUDGET_PER_FRAME, Ordering::Release);
-    }
+	/// Reset the budget to full at the start of a new frame.
+	pub fn reset() {
+		BUDGET_REMAINING.store(MESH_BUDGET_PER_FRAME, Ordering::Release);
+	}
 
-    /// Check if any budget remains.
-    #[must_use]
-    pub fn has_budget() -> bool {
-        BUDGET_REMAINING.load(Ordering::Acquire) > 0
-    }
+	/// Check if any budget remains.
+	#[must_use]
+	pub fn has_budget() -> bool {
+		BUDGET_REMAINING.load(Ordering::Acquire) > 0
+	}
 }

@@ -162,7 +162,8 @@ impl Event {
 	/// The inverse of [`to_vst3`](Self::to_vst3), `None` for events that can't be represented
 	/// (notes outside of the MIDI range, and the one parameter id that CLAP reserves).
 	#[must_use]
-	pub fn from_vst3(event: vst3_host::Event) -> Option<Self> {		let note_id = |note_id: Option<i32>| {
+	pub fn from_vst3(event: vst3_host::Event) -> Option<Self> {
+		let note_id = |note_id: Option<i32>| {
 			note_id
 				.and_then(|id| u32::try_from(id).ok())
 				.map_or(Match::All, Match::Specific)
