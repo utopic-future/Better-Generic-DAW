@@ -53,6 +53,9 @@ pub struct State {
 	pub secondary: HashSet<usize>,
 	pub position: Vector,
 	pub scale: Vector,
+	draw_layers: Vec<Vec<usize>>,
+	draw_layer_count: usize,
+	active_by_key: Vec<Vec<(usize, f32)>>,
 }
 
 impl State {
@@ -362,7 +365,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for PianoRoll<'a, Message
 		cursor: Cursor,
 		viewport: &Rectangle,
 	) {
-		let state = self.state.borrow();
+		let mut state = self.state.borrow_mut();
 
 		for key in (0..127).map(MidiKey) {
 			let Some(bounds) = Rectangle::new(
@@ -382,9 +385,20 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for PianoRoll<'a, Message
 			);
 		}
 
-		let mut allocs = Vec::new();
-		let mut active_by_key: [Vec<(usize, f32)>; 128] =
-			std::array::from_fn(|_| Vec::new());
+		let State {
+			draw_layers,
+			draw_layer_count,
+			active_by_key,
+			..
+		} = &mut *state;
+		for layer in draw_layers.iter_mut() {
+			layer.clear();
+		}
+		active_by_key.resize_with(128, Vec::new);
+		for active in active_by_key.iter_mut() {
+			active.clear();
+		}
+		*draw_layer_count = 0;
 
 		// Visit each note once, then keep overlap state per pitch.
 		for (i, (note, note_layout)) in self.notes.iter().zip(layout.children()).enumerate() {
@@ -401,19 +415,19 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for PianoRoll<'a, Message
 				.map_or_default(|layer| layer + 1);
 			active.push((layer, bounds.x + bounds.width));
 
-			if layer == allocs.len() {
-				allocs.push(Vec::new());
+			if layer >= draw_layers.len() {
+				draw_layers.resize_with(layer + 1, Vec::new);
 			}
-
-			allocs[layer].push(i);
+			draw_layers[layer].push(i);
+			*draw_layer_count = (*draw_layer_count).max(layer + 1);
 		}
 
-		for (i, alloc) in allocs.into_iter().enumerate() {
+		for (i, alloc) in draw_layers[..*draw_layer_count].iter().enumerate() {
 			if i != 0 {
 				renderer.start_layer(Rectangle::INFINITE);
 			}
 
-			for note in alloc {
+			for &note in alloc {
 				self.notes[note].draw(
 					&tree.children[note],
 					renderer,
