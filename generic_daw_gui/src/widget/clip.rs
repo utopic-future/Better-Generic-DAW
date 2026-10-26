@@ -34,8 +34,12 @@ use iced::{
 use std::{
 	borrow::{Borrow, BorrowMut},
 	cell::{Cell, RefCell},
+	collections::HashMap,
 	sync::Arc,
 };
+
+const WAVEFORM_TILE_WIDTH: f32 = 256.0;
+const MAX_WAVEFORM_TILES: usize = 16;
 
 #[derive(Default, PartialEq)]
 struct ClipInfo {
@@ -49,6 +53,8 @@ struct ClipInfo {
 
 struct State {
 	mesh_cache: RefCell<mesh::Cache>,
+	mesh_tiles: RefCell<HashMap<usize, mesh::Cache>>,
+	last_mesh_size: Cell<Size>,
 	canvas_cache: RefCell<canvas::Cache>,
 	volume_text: String,
 	volume_paragraph: Plain<Paragraph>,
@@ -71,6 +77,8 @@ impl Default for State {
 	fn default() -> Self {
 		Self {
 			mesh_cache: RefCell::new(mesh::Cache::new(Arc::default())),
+			mesh_tiles: RefCell::new(HashMap::new()),
+			last_mesh_size: Cell::new(Size::new(0.0, 0.0)),
 			canvas_cache: RefCell::default(),
 			volume_text: String::default(),
 			volume_paragraph: Plain::default(),
@@ -608,6 +616,12 @@ impl<Message> Widget<Message, Theme, Renderer> for Clip<'_, Message> {
 			return;
 		}
 
+		let unclipped_bounds = layout.bounds().shrink(padding::top(header_height));
+		if state.last_mesh_size.get() != unclipped_bounds.size() {
+			state.last_mesh_size.set(unclipped_bounds.size());
+			state.mesh_dirty.set(true);
+		}
+
 		renderer.fill_quad(
 			Quad {
 				bounds: lower_bounds,
@@ -627,6 +641,7 @@ impl<Message> Widget<Message, Theme, Renderer> for Clip<'_, Message> {
 			if !mesh_cache.is_empty() {
 				mesh_cache.update(Arc::default());
 			}
+			state.mesh_tiles.borrow_mut().clear();
 		}
 		if state.canvas_dirty.get() {
 			state.canvas_dirty.set(false);
@@ -639,38 +654,79 @@ impl<Message> Widget<Message, Theme, Renderer> for Clip<'_, Message> {
 			if !mesh_cache.is_empty() {
 				mesh_cache.update(Arc::default());
 			}
+			state.mesh_tiles.borrow_mut().clear();
 		}
 
 		let playlist = self.playlist.borrow();
 		let frames_per_px = frames_per_px(playlist.scale, self.transport);
-		let unclipped_bounds = layout.bounds().shrink(padding::top(header_height));
 
 		match self.inner {
 			Inner::AudioClip(inner) => {
-				if mesh_cache.is_empty()
-					&& MeshBudget::try_consume()
-					&& let Some(mesh) = debug::time_with("Waveform", || {
-						let resample_ratio = inner.sample.resample_ratio(self.transport);
-						inner.sample.lods.mesh(
-							&inner.sample.samples,
-							inner.clip.position.offset() / resample_ratio,
-							self.transport,
-							inner.clip.volume,
-							Transition {
-								len: inner.clip.fade_start.len / resample_ratio,
-								..inner.clip.fade_start
-							},
-							Transition {
-								len: inner.clip.fade_end.len / resample_ratio,
-								..inner.clip.fade_end
-							},
-							frames_per_px / resample_ratio as f32 * inner.clip.stretch as f32,
-							theme.palette().background.strong.text,
-							unclipped_bounds,
-							lower_bounds,
-						)
-					}) {
-					mesh_cache.update(Arc::from([mesh]));
+				let visible_left = (lower_bounds.x - unclipped_bounds.x).max(0.0);
+				let visible_right = (lower_bounds.x + lower_bounds.width - unclipped_bounds.x)
+					.min(unclipped_bounds.width);
+				if visible_right > visible_left {
+					let first_tile = (visible_left / WAVEFORM_TILE_WIDTH).floor() as usize;
+					let last_tile =
+						(visible_right / WAVEFORM_TILE_WIDTH).ceil() as usize - 1;
+					let local_bounds = Rectangle::new(Point::ORIGIN, unclipped_bounds.size());
+					let resample_ratio = inner.sample.resample_ratio(self.transport);
+					let mut mesh_tiles = state.mesh_tiles.borrow_mut();
+
+					for tile in first_tile..=last_tile {
+						let tile_x = tile as f32 * WAVEFORM_TILE_WIDTH;
+						let tile_width =
+							WAVEFORM_TILE_WIDTH.min(unclipped_bounds.width - tile_x);
+						let tile_bounds = Rectangle::new(
+							Point::new(tile_x, 0.0),
+							Size::new(tile_width, unclipped_bounds.height),
+						);
+						let tile_cache = mesh_tiles
+							.entry(tile)
+							.or_insert_with(|| mesh::Cache::new(Arc::default()));
+
+						if tile_cache.is_empty()
+							&& MeshBudget::try_consume()
+							&& let Some(mesh) = debug::time_with("Waveform", || {
+								inner.sample.lods.mesh(
+									&inner.sample.samples,
+									inner.clip.position.offset() / resample_ratio,
+									self.transport,
+									inner.clip.volume,
+									Transition {
+										len: inner.clip.fade_start.len / resample_ratio,
+										..inner.clip.fade_start
+									},
+									Transition {
+										len: inner.clip.fade_end.len / resample_ratio,
+										..inner.clip.fade_end
+									},
+									frames_per_px / resample_ratio as f32
+										* inner.clip.stretch as f32,
+									theme.palette().background.strong.text,
+									local_bounds,
+									tile_bounds,
+								)
+							}) {
+							tile_cache.update(Arc::from([mesh]));
+						}
+
+						if !tile_cache.is_empty() {
+							renderer.with_translation(
+								Vector::new(unclipped_bounds.x + tile_x, unclipped_bounds.y),
+								|renderer| renderer.draw_mesh_cache(tile_cache.clone()),
+							);
+						}
+					}
+
+					let visible_center = (first_tile + last_tile) / 2;
+					let keep = MAX_WAVEFORM_TILES.max(last_tile - first_tile + 1);
+					if mesh_tiles.len() > keep {
+						let mut cached_tiles = mesh_tiles.keys().copied().collect::<Vec<_>>();
+						cached_tiles.sort_by_key(|tile| tile.abs_diff(visible_center));
+						cached_tiles.truncate(keep);
+						mesh_tiles.retain(|tile, _| cached_tiles.contains(tile));
+					}
 				}
 
 				let fill_canvas = |renderer: &Renderer, frame: &mut Frame| {
@@ -848,7 +904,6 @@ impl<Message> Widget<Message, Theme, Renderer> for Clip<'_, Message> {
 				renderer.with_translation(
 					Vector::new(lower_bounds.x, lower_bounds.y),
 					|renderer| {
-						renderer.draw_mesh_cache(mesh_cache.clone());
 						renderer.draw_geometry(canvas_cache.draw(
 							renderer,
 							lower_bounds.size(),
