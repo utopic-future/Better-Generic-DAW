@@ -1686,7 +1686,20 @@ impl ArrangementView {
 
 		match action {
 			playlist::ClipAction::Duplicate => {
-				self.handle_playlist_action(playlist::Action::Clone, config, state)
+				let new_start = self.arrangement.tracks()[track].clips[clip]
+					.end(self.arrangement.transport());
+				let new_clip = self.arrangement.duplicate_clip(track, clip);
+				self.arrangement.clip_move_to(track, new_clip, new_start);
+				history::record_clip_add(
+					&mut self.arrangement,
+					&mut self.history,
+					track,
+					new_clip,
+				);
+				let primary = &mut self.playlist.get_mut().primary;
+				primary.clear();
+				primary.insert((track, new_clip));
+				Action::none()
 			}
 			playlist::ClipAction::Delete => {
 				self.handle_playlist_action(playlist::Action::Delete, config, state)
