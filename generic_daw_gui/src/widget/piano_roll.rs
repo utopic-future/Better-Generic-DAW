@@ -379,39 +379,30 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for PianoRoll<'a, Message
 		}
 
 		let mut allocs = Vec::new();
-		let active = &mut Vec::<(usize, _)>::new();
+		let mut active_by_key: [Vec<(usize, f32)>; 128] =
+			std::array::from_fn(|_| Vec::new());
 
-		(0..128)
-			.map(|note| {
-				self.notes
-					.iter()
-					.enumerate()
-					.zip(layout.children())
-					.filter_map(move |((i, n), l)| (n.note.key.0 == note).then_some((i, l)))
-			})
-			.for_each(|children| {
-				active.clear();
+		// Visit each note once, then keep overlap state per pitch.
+		for (i, (note, note_layout)) in self.notes.iter().zip(layout.children()).enumerate() {
+			let Some(bounds) = note_layout.bounds().intersection(viewport) else {
+				continue;
+			};
 
-				for (i, layout) in children {
-					let Some(bounds) = layout.bounds().intersection(viewport) else {
-						continue;
-					};
+			let active = &mut active_by_key[usize::from(note.note.key.0)];
+			active.retain(|&(_, end)| end > bounds.x);
+			let layer = active
+				.iter()
+				.map(|&(layer, _)| layer)
+				.max()
+				.map_or_default(|layer| layer + 1);
+			active.push((layer, bounds.x + bounds.width));
 
-					active.retain(|&(_, e)| e > bounds.x);
-					let layer = active
-						.iter()
-						.map(|&(l, _)| l)
-						.max()
-						.map_or_default(|l| l + 1);
-					active.push((layer, bounds.x + bounds.width));
+			if layer == allocs.len() {
+				allocs.push(Vec::new());
+			}
 
-					if layer == allocs.len() {
-						allocs.push(Vec::new());
-					}
-
-					allocs[layer].push(i);
-				}
-			});
+			allocs[layer].push(i);
+		}
 
 		for (i, alloc) in allocs.into_iter().enumerate() {
 			if i != 0 {
