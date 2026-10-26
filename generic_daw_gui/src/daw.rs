@@ -175,6 +175,10 @@ pub enum Message {
 	),
 
 	SaveFinished(Save),
+	SavePendingAction,
+	DiscardPendingAction,
+	CancelPendingAction,
+	SaveAsCancelled,
 
 	ScanProgress(Scan, f32),
 	ScanStatus(Scan, Option<Arc<str>>),
@@ -330,11 +334,22 @@ impl Tab {
 	}
 }
 
+#[derive(Clone, Debug)]
+enum PendingAction {
+	Exit(window::Id),
+	Open(Arc<Path>, bool),
+	New,
+}
+
 #[derive(Debug)]
 pub struct Daw {
 	config: Config,
 	state: State,
 	current_project: Option<Arc<Path>>,
+	saved_project: Option<Vec<u8>>,
+	pending_action: Option<PendingAction>,
+	saving_pending_action: bool,
+	allow_dirty_transition: bool,
 
 	arrangement_view: ArrangementView,
 	clap_host: ClapHost,
@@ -426,6 +441,10 @@ impl Daw {
 			config,
 			state,
 			current_project: None,
+			saved_project: None,
+			pending_action: None,
+			saving_pending_action: false,
+			allow_dirty_transition: false,
 
 			arrangement_view,
 			clap_host,
@@ -462,6 +481,8 @@ impl Daw {
 			project,
 			files_hovered: false,
 		};
+
+		this.saved_project = Some(this.serialize_project());
 
 		let init = if recovering {
 			Task::none()
@@ -576,12 +597,14 @@ impl Daw {
 			}
 			Message::CloseRequested(window) => {
 				if window == self.main_window_id {
-					if !self.recovering {
-						self.state.recovery_project = None;
-						self.state.write();
+					if self.allow_dirty_transition {
+						self.allow_dirty_transition = false;
+					} else if self.has_unsaved_changes() {
+						self.pending_action = Some(PendingAction::Exit(window));
+						return Task::none();
+					} else {
+						return self.perform_pending_action(PendingAction::Exit(window));
 					}
-					self.plugins.memory().write();
-					return iced::exit();
 				}
 			}
 			Message::ProjectLoaded(data) => {
@@ -592,6 +615,7 @@ impl Daw {
 					NoClone(NoDebug(processor)),
 					view,
 				) = *data;
+				let is_new_project = path.is_none();
 
 				self.plugin_picker = None;
 
@@ -616,6 +640,9 @@ impl Daw {
 					ArrangementView::new(arrangement, &self.state, view),
 				)
 				.arrangement;
+				if is_new_project {
+					self.saved_project = Some(self.serialize_project());
+				}
 
 				let p_receiver = arrangement.request_processor(PullSlot::Full(processor));
 
@@ -633,6 +660,25 @@ impl Daw {
 					self.save = None;
 					self.save_status = None;
 				}
+			}
+			Message::SavePendingAction => {
+				if self.pending_action.is_some() {
+					self.saving_pending_action = true;
+					return self.update(Message::SaveFile);
+				}
+			}
+			Message::DiscardPendingAction => {
+				if let Some(action) = self.pending_action.take() {
+					self.saving_pending_action = false;
+					return self.perform_pending_action(action);
+				}
+			}
+			Message::CancelPendingAction => {
+				self.pending_action = None;
+				self.saving_pending_action = false;
+			}
+			Message::SaveAsCancelled => {
+				self.saving_pending_action = false;
 			}
 			Message::ScanProgress(scan, progress) => {
 				if self.scan == Some(scan) {
@@ -660,6 +706,12 @@ impl Daw {
 				}
 			}
 			Message::NewFile => {
+				if self.allow_dirty_transition {
+					self.allow_dirty_transition = false;
+				} else if self.has_unsaved_changes() {
+					self.pending_action = Some(PendingAction::New);
+					return Task::none();
+				}
 				return Arrangement::empty(
 					self.arrangement_view.arrangement.transport().input_channels,
 					self.arrangement_view
@@ -729,23 +781,19 @@ impl Daw {
 						.save_file()
 				})
 				.then(Task::future)
-				.and_then(Task::done)
-				.map(|p| p.path().with_extension("gdp").into())
-				.map(Message::SaveAsFile);
+				.map(|p| match p {
+					Some(p) => Message::SaveAsFile(p.path().with_extension("gdp").into()),
+					None => Message::SaveAsCancelled,
+				});
 			}
 			Message::SaveAsFile(path) => {
-				if let Err(err) = std::fs::write(
-					&path,
-					self.arrangement_view.save(
-						&mut self.clap_host,
-						&self.vst2_host,
-						&self.vst3_host,
-					),
-				) {
+				let contents = self.serialize_project();
+				if let Err(err) = std::fs::write(&path, &contents) {
 					warn!("{err}");
 					return Task::none();
 				}
 
+				self.saved_project = Some(contents);
 				let save = Save::unique();
 				self.save = Some(save);
 				self.save_status = path
@@ -757,9 +805,16 @@ impl Daw {
 				self.state.recovery_project = None;
 				self.state.write();
 
-				return Task::perform(Timer::after(Duration::from_secs(4)), move |_| {
+				let timer = Task::perform(Timer::after(Duration::from_secs(4)), move |_| {
 					Message::SaveFinished(save)
 				});
+				if self.saving_pending_action {
+					self.saving_pending_action = false;
+					if let Some(action) = self.pending_action.take() {
+						return Task::batch([timer, self.perform_pending_action(action)]);
+					}
+				}
+				return timer;
 			}
 			Message::AutosaveFile => {
 				let name = self
@@ -852,6 +907,12 @@ impl Daw {
 				.map(|path| Message::OpenFile(path, true));
 			}
 			Message::OpenFile(path, current) => {
+				if self.allow_dirty_transition {
+					self.allow_dirty_transition = false;
+				} else if self.has_unsaved_changes() {
+					self.pending_action = Some(PendingAction::Open(path, current));
+					return Task::none();
+				}
 				if self.progress.is_none() {
 					self.progress = Some(0.0);
 					return Arrangement::start_load(
@@ -895,6 +956,7 @@ impl Daw {
 				self.missing_samples.remove(index).1.send(response).unwrap();
 			}
 			Message::OpenedFile => {
+				self.saved_project = Some(self.serialize_project());
 				self.progress = None;
 				self.status = None;
 				self.missing_plugins.clear();
@@ -1791,6 +1853,43 @@ impl Daw {
 				)
 				.on_press(Message::ToggleConfigView),
 			)),
+			self.pending_action.as_ref().map(|action| {
+				let verb = match action {
+					PendingAction::Exit(_) => "quitting",
+					PendingAction::Open(_, _) => "opening another project",
+					PendingAction::New => "starting a new project",
+				};
+				opaque(
+					mouse_area(
+						center(opaque(
+							container(
+								column![
+									text(format!("Save changes before {verb}?"))
+										.size(LINE_HEIGHT)
+										.font(Font::DEFAULT.weight(Weight::Bold)),
+									rule::horizontal(1),
+									row![
+										button("Save")
+										.style(button_with_radius(button::success, border::left(5)))
+										.on_press(Message::SavePendingAction),
+										button("Don't Save")
+										.style(button_with_radius(button::warning, 0))
+										.on_press(Message::DiscardPendingAction),
+										button("Cancel")
+										.style(button_with_radius(button::subtle, border::right(5)))
+										.on_press(Message::CancelPendingAction),
+									]
+									.spacing(10)
+								]
+							.width(Shrink)
+							.spacing(10)
+							.padding(15)
+							.style(container_with_radius(weakest_bordered_box, 10))
+						))
+						.style(|_| container::background(Color::BLACK.scale_alpha(ALPHA_2_3))),
+					)
+				)
+			}),
 			self.progress.map(|progress| mouse_area(
 				container(
 					column![
@@ -2007,6 +2106,46 @@ impl Daw {
 			))
 		]
 		.into()
+	}
+
+	fn serialize_project(&mut self) -> Vec<u8> {
+		self.arrangement_view.save(
+			&mut self.clap_host,
+			&self.vst2_host,
+			&self.vst3_host,
+		)
+	}
+
+	fn has_unsaved_changes(&mut self) -> bool {
+		let current = self.serialize_project();
+		self.saved_project
+			.as_ref()
+			.map_or(true, |saved| *saved != current)
+	}
+
+	fn perform_pending_action(&mut self, action: PendingAction) -> Task<Message> {
+		match action {
+			PendingAction::Exit(window) => {
+				if window == self.main_window_id {
+					if !self.recovering {
+						self.state.recovery_project = None;
+						self.state.write();
+					}
+					self.plugins.memory().write();
+					iced::exit()
+				} else {
+					Task::none()
+				}
+			}
+			PendingAction::Open(path, current) => {
+				self.allow_dirty_transition = true;
+				self.update(Message::OpenFile(path, current))
+			}
+			PendingAction::New => {
+				self.allow_dirty_transition = true;
+				self.update(Message::NewFile)
+			}
+		}
 	}
 
 	pub fn title(&self, window: window::Id) -> String {
