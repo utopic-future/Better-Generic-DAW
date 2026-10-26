@@ -1,7 +1,23 @@
 name: rust
 on: [push, pull_request]
 jobs:
+  check:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-hack
+      - uses: Swatinem/rust-cache@v2
+      - if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libpipewire-0.3-dev
+      - run: curl https://unpkg.com/lucide-static@latest/font/Lucide.ttf -Lo Lucide.ttf
+      - run: cargo hack check --workspace
   build:
+    if: github.ref == 'refs/heads/main'
+    needs: check
     runs-on: ${{ matrix.os.os }}
     strategy:
       matrix:
