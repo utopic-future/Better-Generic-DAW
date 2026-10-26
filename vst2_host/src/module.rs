@@ -199,7 +199,7 @@ mod platform {
 		let binary = if path.is_dir() {
 			binary(path).ok_or_else(|| Error::NoEntryPoint(path.clone()))?
 		} else {
-			path.to_owned()
+			path.as_ref().to_path_buf()
 		};
 
 		// SAFETY: loading an external library object file is inherently unsafe.

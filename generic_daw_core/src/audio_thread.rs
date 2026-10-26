@@ -457,6 +457,7 @@ pub struct AudioThread {
 	update_buffers: Vec<Vec<Update>>,
 	updates: Vec<Update>,
 	metronome_cache: MetronomeCache,
+	last_overrun_report: Instant,
 }
 
 impl AudioThread {
@@ -503,6 +504,7 @@ impl AudioThread {
 			update_buffers: Vec::new(),
 			updates: Vec::new(),
 			metronome_cache: HashMap::new(),
+			last_overrun_report: Instant::now(),
 		};
 
 		// Pre-resample metronome clicks for the current sample rate
@@ -583,8 +585,10 @@ impl AudioThread {
 	}
 
 	#[must_use]
-	fn recv_events(&mut self) -> Option<Action> {
+	fn recv_events(&mut self) -> (Option<Action>, usize) {
+		let mut processed_messages = 0;
 		while let Ok(msg) = self.consumer.pop() {
+			processed_messages += 1;
 			trace!("{msg:?}");
 
 			match msg {
@@ -672,15 +676,15 @@ impl AudioThread {
 					self.update_buffers.push(update);
 				}
 				Message::RequestProcessor(sender, slot) => {
-					return Some(Action::SendProcessor(sender, *slot));
+					return (Some(Action::SendProcessor(sender, *slot)), processed_messages);
 				}
 				Message::RequestProcessorAndPool(sender, slot) => {
-					return Some(Action::SendProcessorAndPool(sender, *slot));
+					return (Some(Action::SendProcessorAndPool(sender, *slot)), processed_messages);
 				}
 			}
 		}
 
-		None
+		(None, processed_messages)
 	}
 
 	fn process(
@@ -698,7 +702,10 @@ impl AudioThread {
 			self.updates = self.update_buffers.pop().unwrap_or_default();
 		}
 
-		if let Some(action) = self.recv_events() {
+		let (action, processed_messages) = self.recv_events();
+		if let Some(action) = action {
+			let now = Instant::now();
+			self.report_over_budget(now, now - start, frames, processed_messages);
 			return Some(action);
 		}
 
@@ -783,8 +790,10 @@ impl AudioThread {
 			.for_each_node_mut(|node, _, _, _| node.collect_updates(&mut self.updates));
 
 		let now = Instant::now();
-		self.load_duration += now - start;
+		let elapsed = now - start;
+		self.load_duration += elapsed;
 		self.load_frames += frames;
+		self.report_over_budget(now, elapsed, frames, processed_messages);
 
 		const MAX_UPDATE_BATCH_SIZE: usize = 256;
 		const MAX_UPDATE_BUFFERS: usize = 4;
@@ -834,6 +843,26 @@ impl AudioThread {
 		}
 
 		None
+	}
+
+	fn report_over_budget(
+		&mut self,
+		now: Instant,
+		elapsed: Duration,
+		frames: usize,
+		processed_messages: usize,
+	) {
+		let budget = Duration::from_secs_f64(
+			frames as f64 / f64::from(self.transport().sample_rate.get()),
+		);
+		if elapsed > budget
+			&& now.duration_since(self.last_overrun_report) >= Duration::from_secs(1)
+		{
+			warn!(
+				"audio block took {elapsed:?} for {frames} frames (budget {budget:?}, {processed_messages} queued messages)"
+			);
+			self.last_overrun_report = now;
+		}
 	}
 
 	fn metronome(&mut self, frames: usize) {

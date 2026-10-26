@@ -69,7 +69,7 @@ use std::{
 	iter::repeat,
 	path::Path,
 	sync::Arc,
-	time::Duration,
+	time::{Duration, Instant},
 };
 use sweeten::widget::drag::DragEvent;
 use utils::{NoClone, NoDebug};
@@ -267,12 +267,18 @@ impl ArrangementView {
 		config: &Config,
 		state: &mut State,
 	) -> Action<daw::Instruction, Message> {
+		let started = Instant::now();
 		let ends_gesture = Self::ends_gesture(&message);
 
 		self.history.begin();
 		let action = self.update_inner(message, config, state);
 		let commit = ends_gesture || !self.is_dragging();
 		self.history.end(&mut self.arrangement, commit);
+
+		let elapsed = started.elapsed();
+		if elapsed >= Duration::from_millis(8) {
+			log::warn!("arrangement UI update took {elapsed:?}");
+		}
 		action
 	}
 
