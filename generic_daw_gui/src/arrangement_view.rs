@@ -1686,7 +1686,15 @@ impl ArrangementView {
 
 		match action {
 			playlist::ClipAction::Duplicate => {
-				self.handle_playlist_action(playlist::Action::Clone, config, state)
+				let len = self.arrangement.tracks()[track].clips[clip]
+					.len(self.arrangement.transport());
+				let clone = self.handle_playlist_action(playlist::Action::Clone, config, state);
+				let move_clone = self.handle_playlist_action(
+					playlist::Action::Drag(Delta::Positive(0), Delta::Positive(len)),
+					config,
+					state,
+				);
+				Action::batch([clone, move_clone])
 			}
 			playlist::ClipAction::Delete => {
 				self.handle_playlist_action(playlist::Action::Delete, config, state)
