@@ -208,7 +208,25 @@ impl<Message> Widget<Message, Theme, Renderer> for Clip<'_, Message> {
 	}
 
 	fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &Limits) -> Node {
-		if let Inner::AudioClip(_) = self.inner {
+		let playlist = self.playlist.borrow();
+
+		let (start, end) = match self.inner {
+			Inner::AudioClip(inner) => (
+				inner.clip.position.start(),
+				inner.clip.position.end(self.transport),
+			),
+			Inner::MidiClip(inner) => (inner.clip.position.start(), inner.clip.position.end()),
+			Inner::AudioRecording(inner) => (inner.position, inner.end(self.transport)),
+			Inner::MidiRecording(inner) => (inner.position, inner.end(self.transport)),
+		};
+
+		let start = time_to_px(start, playlist.position, playlist.scale, self.transport);
+		let end = time_to_px(end, playlist.position, playlist.scale, self.transport);
+
+		if start < limits.max().width
+			&& end > 0.0
+			&& let Inner::AudioClip(_) = self.inner
+		{
 			let state = tree.state.downcast_mut::<State>();
 			state.volume_paragraph.update(Text {
 				content: &state.volume_text,
@@ -224,21 +242,6 @@ impl<Message> Widget<Message, Theme, Renderer> for Clip<'_, Message> {
 				hint_factor: renderer.hint_factor(),
 			});
 		}
-
-		let playlist = self.playlist.borrow();
-
-		let (start, end) = match self.inner {
-			Inner::AudioClip(inner) => (
-				inner.clip.position.start(),
-				inner.clip.position.end(self.transport),
-			),
-			Inner::MidiClip(inner) => (inner.clip.position.start(), inner.clip.position.end()),
-			Inner::AudioRecording(inner) => (inner.position, inner.end(self.transport)),
-			Inner::MidiRecording(inner) => (inner.position, inner.end(self.transport)),
-		};
-
-		let start = time_to_px(start, playlist.position, playlist.scale, self.transport);
-		let end = time_to_px(end, playlist.position, playlist.scale, self.transport);
 
 		Node::new(Size::new(end - start, limits.max().height)).translate(Vector::new(start, 0.0))
 	}

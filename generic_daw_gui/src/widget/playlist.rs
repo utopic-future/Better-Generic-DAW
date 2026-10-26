@@ -419,7 +419,11 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 						(start_track.min(end_track), start_track.max(end_track));
 					let (start_pos, end_pos) = (start_pos.min(end_pos), start_pos.max(end_pos));
 
-					self.tracks
+					state
+						.primary
+						.retain(|&(track, _)| (start_track..=end_track).contains(&track));
+
+					self.tracks[start_track..=end_track]
 						.iter()
 						.flat_map(|track| &track.clips)
 						.for_each(|clip| {
@@ -440,9 +444,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 								}
 							};
 
-							if (start_track..=end_track).contains(&index.0)
-								&& start_pos.max(start) < end_pos.min(end)
-							{
+							if start_pos.max(start) < end_pos.min(end) {
 								state.primary.insert(index);
 							} else {
 								state.primary.remove(&index);
@@ -684,12 +686,12 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 
 		layout
 			.children()
-			.map(|layout| layout.children().enumerate())
 			.enumerate()
-			.for_each(|(track, children)| {
+			.filter(|(_, track_layout)| track_layout.bounds().intersects(viewport))
+			.for_each(|(track, track_layout)| {
 				active.clear();
 
-				for (clip, layout) in children {
+				for (clip, layout) in track_layout.children().enumerate() {
 					let Some(bounds) = layout.bounds().intersection(viewport) else {
 						continue;
 					};
@@ -841,16 +843,22 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 			Status::DraggingVolume(..) => Interaction::ResizingVertically,
 			Status::FadingStartLen(..) | Status::FadingEndLen(..) => Interaction::Pointer,
 			Status::FadingStartP(..) | Status::FadingEndP(..) => Interaction::Crosshair,
-			Status::None => self
-				.tracks
-				.iter()
-				.zip(&tree.children)
-				.zip(layout.children())
-				.map(|((child, tree), layout)| {
-					child.mouse_interaction(tree, layout, cursor, viewport, renderer)
-				})
-				.find(|&i| i != Interaction::default())
-				.unwrap_or_default(),
+			Status::None => {
+				let Some(position) = cursor.position_from(layout.position()) else {
+					return Interaction::default();
+				};
+				let Some(track) = track_index(&layout, position) else {
+					return Interaction::default();
+				};
+
+				self.tracks[track].mouse_interaction(
+					&tree.children[track],
+					layout.child(track),
+					cursor,
+					viewport,
+					renderer,
+				)
+			}
 		}
 	}
 
@@ -867,6 +875,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 			.iter_mut()
 			.zip(&mut tree.children)
 			.zip(layout.children())
+			.filter(|((_, _), layout)| layout.bounds().intersects(viewport))
 			.filter_map(|((child, tree), layout)| {
 				child.overlay(tree, layout, renderer, viewport, translation)
 			})
