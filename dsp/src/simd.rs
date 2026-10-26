@@ -5,25 +5,22 @@ mod simd_impl {
 	use std::arch::x86_64::*;
 
 	/// Apply volume and pan (Stereo mode) using SSE2
-	/// Processes 4 frames at a time
+	/// Processes two interleaved stereo frames per SIMD iteration.
 	#[target_feature(enable = "sse2")]
 	unsafe fn utility_process_stereo_sse2_impl(audio: &mut [[f32; 2]], l_gain: f32, r_gain: f32) {
 		let len = audio.len();
-		let l_vec = _mm_set1_ps(l_gain);
-		let r_vec = _mm_set1_ps(r_gain);
+		let gains = _mm_setr_ps(l_gain, r_gain, l_gain, r_gain);
+		let samples = audio.as_mut_ptr().cast::<f32>();
 		let mut i = 0;
 
-		while i + 4 <= len {
-			let l = _mm_loadu_ps(&audio[i][0] as *const f32);
-			let r = _mm_loadu_ps(&audio[i][1] as *const f32);
-
-			let l_new = _mm_mul_ps(l, l_vec);
-			let r_new = _mm_mul_ps(r, r_vec);
-
-			_mm_storeu_ps(&mut audio[i][0] as *mut f32, l_new);
-			_mm_storeu_ps(&mut audio[i][1] as *mut f32, r_new);
-
-			i += 4;
+		while i + 2 <= len {
+			let offset = i * 2;
+			let input_ptr = unsafe { samples.add(offset) };
+			let values = unsafe { _mm_loadu_ps(input_ptr) };
+			let output = _mm_mul_ps(values, gains);
+			let output_ptr = unsafe { samples.add(offset) };
+			unsafe { _mm_storeu_ps(output_ptr, output) };
+			i += 2;
 		}
 
 		while i < len {
@@ -43,25 +40,22 @@ mod simd_impl {
 		rr: f32,
 	) {
 		let len = audio.len();
-		let ll_vec = _mm_set1_ps(ll);
-		let lr_vec = _mm_set1_ps(lr);
-		let rl_vec = _mm_set1_ps(rl);
-		let rr_vec = _mm_set1_ps(rr);
+		let same_gain = _mm_setr_ps(ll, rr, ll, rr);
+		let cross_gain = _mm_setr_ps(rl, lr, rl, lr);
+		let samples = audio.as_mut_ptr().cast::<f32>();
 		let mut i = 0;
 
-		while i + 4 <= len {
-			let ls = _mm_loadu_ps(&audio[i][0] as *const f32);
-			let rs = _mm_loadu_ps(&audio[i][1] as *const f32);
-
-			// new_ls = ls * ll + rs * rl
-			// new_rs = rs * rr + ls * lr
-			let new_ls = _mm_add_ps(_mm_mul_ps(ls, ll_vec), _mm_mul_ps(rs, rl_vec));
-			let new_rs = _mm_add_ps(_mm_mul_ps(rs, rr_vec), _mm_mul_ps(ls, lr_vec));
-
-			_mm_storeu_ps(&mut audio[i][0] as *mut f32, new_ls);
-			_mm_storeu_ps(&mut audio[i][1] as *mut f32, new_rs);
-
-			i += 4;
+		while i + 2 <= len {
+			let offset = i * 2;
+			let input_ptr = unsafe { samples.add(offset) };
+			let values = unsafe { _mm_loadu_ps(input_ptr) };
+			let swapped = _mm_shuffle_ps(values, values, 0xB1);
+			let same = _mm_mul_ps(values, same_gain);
+			let cross = _mm_mul_ps(swapped, cross_gain);
+			let output = _mm_add_ps(same, cross);
+			let output_ptr = unsafe { samples.add(offset) };
+			unsafe { _mm_storeu_ps(output_ptr, output) };
+			i += 2;
 		}
 
 		while i < len {
@@ -113,3 +107,21 @@ mod simd_impl {
 }
 
 pub use simd_impl::*;
+#[cfg(test)]
+mod tests {
+	use super::{utility_process_split_stereo_sse2, utility_process_stereo_sse2};
+
+	#[test]
+	fn stereo_gain_preserves_interleaved_channels() {
+		let mut audio = [[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]];
+		utility_process_stereo_sse2(&mut audio, 2.0, 0.5);
+		assert_eq!(audio, [[2.0, 5.0], [4.0, 10.0], [6.0, 15.0]]);
+	}
+
+	#[test]
+	fn split_stereo_uses_samples_from_the_same_frame() {
+		let mut audio = [[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]];
+		utility_process_split_stereo_sse2(&mut audio, 2.0, 3.0, 4.0, 5.0);
+		assert_eq!(audio, [[42.0, 53.0], [84.0, 106.0], [126.0, 159.0]]);
+	}
+}

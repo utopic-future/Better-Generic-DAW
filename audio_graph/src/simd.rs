@@ -21,30 +21,25 @@ mod simd_impl {
 
 	/// Mix two stereo buffers with a gain factor using SSE2
 	/// dst += src * gain
-	/// Processes 4 frames (8 samples) at a time
+	/// Processes two interleaved stereo frames (four floats) at a time
 	#[target_feature(enable = "sse2")]
 	unsafe fn mix_stereo_sse2_impl(dst: &mut [[f32; 2]], src: &[[f32; 2]], gain: f32) {
 		let len = dst.len();
 		let gain_vec = _mm_set1_ps(gain);
+		let src_ptr = src.as_ptr().cast::<f32>();
+		let dst_ptr = dst.as_mut_ptr().cast::<f32>();
 		let mut i = 0;
 
-		while i + 4 <= len {
-			let src_l = _mm_loadu_ps(&src[i][0] as *const f32);
-			let src_r = _mm_loadu_ps(&src[i][1] as *const f32);
-
-			let dst_l = _mm_loadu_ps(&dst[i][0] as *const f32);
-			let dst_r = _mm_loadu_ps(&dst[i][1] as *const f32);
-
-			let src_l_gained = _mm_mul_ps(src_l, gain_vec);
-			let src_r_gained = _mm_mul_ps(src_r, gain_vec);
-
-			let new_l = _mm_add_ps(dst_l, src_l_gained);
-			let new_r = _mm_add_ps(dst_r, src_r_gained);
-
-			_mm_storeu_ps(&mut dst[i][0] as *mut f32, new_l);
-			_mm_storeu_ps(&mut dst[i][1] as *mut f32, new_r);
-
-			i += 4;
+		while i + 2 <= len {
+			let offset = i * 2;
+			let src_frame = unsafe { src_ptr.add(offset) };
+			let dst_frame = unsafe { dst_ptr.add(offset) };
+			let src_values = unsafe { _mm_loadu_ps(src_frame) };
+			let dst_values = unsafe { _mm_loadu_ps(dst_frame) };
+			let output = _mm_add_ps(dst_values, _mm_mul_ps(src_values, gain_vec));
+			let output_ptr = unsafe { dst_ptr.add(offset) };
+			unsafe { _mm_storeu_ps(output_ptr, output) };
+			i += 2;
 		}
 
 		while i < len {
@@ -60,19 +55,18 @@ mod simd_impl {
 	unsafe fn copy_stereo_sse2_impl(dst: &mut [[f32; 2]], src: &[[f32; 2]], gain: f32) {
 		let len = dst.len();
 		let gain_vec = _mm_set1_ps(gain);
+		let src_ptr = src.as_ptr().cast::<f32>();
+		let dst_ptr = dst.as_mut_ptr().cast::<f32>();
 		let mut i = 0;
 
-		while i + 4 <= len {
-			let src_l = _mm_loadu_ps(&src[i][0] as *const f32);
-			let src_r = _mm_loadu_ps(&src[i][1] as *const f32);
-
-			let dst_l = _mm_mul_ps(src_l, gain_vec);
-			let dst_r = _mm_mul_ps(src_r, gain_vec);
-
-			_mm_storeu_ps(&mut dst[i][0] as *mut f32, dst_l);
-			_mm_storeu_ps(&mut dst[i][1] as *mut f32, dst_r);
-
-			i += 4;
+		while i + 2 <= len {
+			let offset = i * 2;
+			let src_frame = unsafe { src_ptr.add(offset) };
+			let src_values = unsafe { _mm_loadu_ps(src_frame) };
+			let output = _mm_mul_ps(src_values, gain_vec);
+			let output_ptr = unsafe { dst_ptr.add(offset) };
+			unsafe { _mm_storeu_ps(output_ptr, output) };
+			i += 2;
 		}
 
 		while i < len {
@@ -92,16 +86,17 @@ mod simd_impl {
 	#[target_feature(enable = "sse2")]
 	unsafe fn copy_to_scratch_sse2_impl(scratch: &mut [[f32; 2]], src: &[[f32; 2]]) {
 		let len = scratch.len();
+		let src_ptr = src.as_ptr().cast::<f32>();
+		let dst_ptr = scratch.as_mut_ptr().cast::<f32>();
 		let mut i = 0;
 
-		while i + 4 <= len {
-			let src_l = _mm_loadu_ps(&src[i][0] as *const f32);
-			let src_r = _mm_loadu_ps(&src[i][1] as *const f32);
-
-			_mm_storeu_ps(&mut scratch[i][0] as *mut f32, src_l);
-			_mm_storeu_ps(&mut scratch[i][1] as *mut f32, src_r);
-
-			i += 4;
+		while i + 2 <= len {
+			let offset = i * 2;
+			let src_frame = unsafe { src_ptr.add(offset) };
+			let values = unsafe { _mm_loadu_ps(src_frame) };
+			let dst_frame = unsafe { dst_ptr.add(offset) };
+			unsafe { _mm_storeu_ps(dst_frame, values) };
+			i += 2;
 		}
 
 		while i < len {
@@ -117,29 +112,23 @@ mod simd_impl {
 		let len = audio.len();
 		let mut max_l = _mm_setzero_ps();
 		let mut max_r = _mm_setzero_ps();
+		let samples = audio.as_ptr().cast::<f32>();
 		let mut i = 0;
 
-		while i + 4 <= len {
-			let l = _mm_loadu_ps(&audio[i][0] as *const f32);
-			let r = _mm_loadu_ps(&audio[i][1] as *const f32);
-
-			// Absolute value using bitwise AND with sign bit mask
-			let abs_l = _mm_and_ps(l, _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff)));
-			let abs_r = _mm_and_ps(r, _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff)));
-
-			max_l = _mm_max_ps(max_l, abs_l);
-			max_r = _mm_max_ps(max_r, abs_r);
-
-			i += 4;
+		while i + 2 <= len {
+			let offset = i * 2;
+			let frame_ptr = unsafe { samples.add(offset) };
+			let values = unsafe { _mm_loadu_ps(frame_ptr) };
+			let abs_values = _mm_and_ps(values, _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff)));
+			let left = _mm_shuffle_ps(abs_values, abs_values, 0xA0);
+			let right = _mm_shuffle_ps(abs_values, abs_values, 0xF5);
+			max_l = _mm_max_ps(max_l, left);
+			max_r = _mm_max_ps(max_r, right);
+			i += 2;
 		}
 
-		// Horizontal max reduction
-		let max_l = horizontal_max(max_l);
-		let max_r = horizontal_max(max_r);
-
-		// Handle remainder
-		let mut max_l_final = max_l;
-		let mut max_r_final = max_r;
+		let mut max_l_final = horizontal_max(max_l);
+		let mut max_r_final = horizontal_max(max_r);
 		while i < len {
 			let l = audio[i][0].abs();
 			let r = audio[i][1].abs();
@@ -242,3 +231,37 @@ mod simd_impl {
 }
 
 pub use simd_impl::*;
+#[cfg(test)]
+mod tests {
+	use super::{copy_stereo_sse2, copy_to_scratch_sse2, mix_stereo_sse2, peak_stereo_sse2};
+
+	#[test]
+	fn mix_preserves_interleaved_stereo_frames() {
+		let mut dst = [[10.0, 100.0], [20.0, 200.0], [30.0, 300.0]];
+		let src = [[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]];
+		mix_stereo_sse2(&mut dst, &src, 0.5);
+		assert_eq!(dst, [[10.5, 105.0], [21.0, 210.0], [31.5, 315.0]]);
+	}
+
+	#[test]
+	fn copy_preserves_interleaved_stereo_frames() {
+		let src = [[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]];
+		let mut dst = [[0.0, 0.0]; 3];
+		copy_stereo_sse2(&mut dst, &src, 0.5);
+		assert_eq!(dst, [[0.5, 5.0], [1.0, 10.0], [1.5, 15.0]]);
+	}
+
+	#[test]
+	fn scratch_copy_preserves_interleaved_stereo_frames() {
+		let src = [[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]];
+		let mut dst = [[0.0, 0.0]; 3];
+		copy_to_scratch_sse2(&mut dst, &src);
+		assert_eq!(dst, src);
+	}
+
+	#[test]
+	fn peak_meter_reports_each_channel_independently() {
+		let audio = [[-1.0, 10.0], [2.0, -20.0], [-5.0, 4.0]];
+		assert_eq!(peak_stereo_sse2(&audio), [5.0, 20.0]);
+	}
+}
