@@ -120,14 +120,18 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for PianoRoll<'a, Message
 		shell: &mut Shell<'_, Message>,
 		viewport: &Rectangle,
 	) {
-		self.notes
+		for ((child, tree), note_layout) in self
+			.notes
 			.iter_mut()
 			.zip(&mut tree.children)
 			.zip(layout.children())
 			.rev()
-			.for_each(|((child, tree), layout)| {
-				child.update(tree, event, layout, cursor, renderer, shell, viewport);
-			});
+		{
+			if cursor.position_in(note_layout.bounds()).is_some() {
+				child.update(tree, event, note_layout, cursor, renderer, shell, viewport);
+				break;
+			}
+		}
 
 		let state = &mut *self.state.borrow_mut();
 
