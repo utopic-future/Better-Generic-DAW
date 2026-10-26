@@ -56,7 +56,7 @@ use std::{
 	num::NonZero,
 	path::Path,
 	sync::{Arc, LazyLock, mpsc::Receiver},
-	time::Duration,
+	time::{Duration, Instant},
 };
 use utils::{NoClone, NoDebug, unique_id};
 
@@ -388,6 +388,10 @@ pub struct Daw {
 	main_window_id: window::Id,
 	project: Project,
 	files_hovered: bool,
+	last_ui_frame: Option<Instant>,
+	last_ui_frame_report: Instant,
+	slow_ui_frames: u64,
+	max_ui_frame_gap: Duration,
 }
 
 impl Daw {
@@ -480,6 +484,10 @@ impl Daw {
 			main_window_id,
 			project,
 			files_hovered: false,
+			last_ui_frame: None,
+			last_ui_frame_report: Instant::now(),
+			slow_ui_frames: 0,
+			max_ui_frame_gap: Duration::ZERO,
 		};
 
 		this.saved_project = Some(this.serialize_project());
@@ -1093,7 +1101,28 @@ impl Daw {
 				return self.full_scan_plugins();
 			}
 			Message::GenerateMeshes => {
-				// Reset mesh budget at the start of each frame
+				let now = Instant::now();
+				if let Some(previous) = self.last_ui_frame.replace(now) {
+					let gap = now.saturating_duration_since(previous);
+					if gap >= Duration::from_millis(50) {
+						self.slow_ui_frames += 1;
+						self.max_ui_frame_gap = self.max_ui_frame_gap.max(gap);
+					}
+				}
+				if now.saturating_duration_since(self.last_ui_frame_report)
+					>= Duration::from_secs(5)
+				{
+					if self.slow_ui_frames > 0 {
+						warn!(
+							"UI frame pacing: {} gaps over 50 ms, longest {:?}",
+							self.slow_ui_frames,
+						self.max_ui_frame_gap
+						);
+					}
+					self.slow_ui_frames = 0;
+					self.max_ui_frame_gap = Duration::ZERO;
+					self.last_ui_frame_report = now;
+				}
 				crate::mesh_budget::MeshBudget::reset();
 				return Task::none();
 			}
