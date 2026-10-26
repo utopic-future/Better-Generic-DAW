@@ -16,7 +16,11 @@ impl MeshBudget {
 	/// Returns true if budget was available, false if exhausted.
 	#[must_use]
 	pub fn try_consume() -> bool {
-		BUDGET_REMAINING.fetch_sub(1, Ordering::AcqRel) > 0
+		BUDGET_REMAINING
+			.fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+				remaining.checked_sub(1)
+			})
+			.is_ok()
 	}
 
 	/// Reset the budget to full at the start of a new frame.
