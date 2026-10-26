@@ -661,6 +661,9 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 		cursor: Cursor,
 		viewport: &Rectangle,
 	) {
+		let Some(viewport) = layout.bounds().intersection(viewport) else {
+			return;
+		};
 		let state = self.state.borrow();
 
 		for layout in layout.children() {
@@ -668,7 +671,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 				layout.position() + Vector::new(0.0, layout.bounds().height - 1.0),
 				Size::new(f32::INFINITY, 1.0),
 			)
-			.intersection(viewport) else {
+			.intersection(&viewport) else {
 				continue;
 			};
 
@@ -687,12 +690,12 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 		layout
 			.children()
 			.enumerate()
-			.filter(|(_, track_layout)| track_layout.bounds().intersects(viewport))
+			.filter(|(_, track_layout)| track_layout.bounds().intersects(&viewport))
 			.for_each(|(track, track_layout)| {
 				active.clear();
 
 				for (clip, layout) in track_layout.children().enumerate() {
-					let Some(bounds) = layout.bounds().intersection(viewport) else {
+					let Some(bounds) = layout.bounds().intersection(&viewport) else {
 						continue;
 					};
 
@@ -712,29 +715,31 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for Playlist<'a, Message>
 				}
 			});
 
-		for (i, alloc) in allocs.into_iter().enumerate() {
-			if i != 0 {
-				renderer.start_layer(Rectangle::INFINITE);
-			}
+		renderer.with_layer(viewport, |renderer| {
+			for (i, alloc) in allocs.into_iter().enumerate() {
+				if i != 0 {
+					renderer.start_layer(Rectangle::INFINITE);
+				}
 
-			for (track, clip) in alloc {
-				self.tracks[track].clips[clip].draw(
-					&tree.children[track].children[clip],
-					renderer,
-					theme,
-					style,
-					layout.child(track).child(clip),
-					cursor,
-					viewport,
-				);
-			}
+				for (track, clip) in alloc {
+					self.tracks[track].clips[clip].draw(
+						&tree.children[track].children[clip],
+						renderer,
+						theme,
+						style,
+						layout.child(track).child(clip),
+						cursor,
+						&viewport,
+					);
+				}
 
-			if i != 0 {
-				renderer.end_layer();
+				if i != 0 {
+					renderer.end_layer();
+				}
 			}
-		}
+		});
 
-		renderer.with_layer(*viewport, |renderer| match state.status {
+		renderer.with_layer(viewport, |renderer| match state.status {
 			Status::Hovering(_, _, Some((Some(track), time))) => {
 				let bounds = layout.child(track).bounds();
 				renderer.fill_quad(
