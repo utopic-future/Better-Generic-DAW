@@ -288,6 +288,12 @@ impl Vst2Host {
 					{
 						return window::resize(window, wanted).into();
 					}
+
+					if let Some(&id) = self.plugin_of_window.get(&window)
+						&& let Some(hosted) = self.plugins.get(&id)
+					{
+						hosted.plugin.resize_editor_child_to_parent();
+					}
 				}
 			}
 			Message::WindowRescaled(window, scale_factor) => {
