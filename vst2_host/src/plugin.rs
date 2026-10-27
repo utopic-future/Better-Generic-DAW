@@ -43,6 +43,8 @@ unsafe impl Sync for Shared {}
 struct Editor {
 	/// The size the editor had.
 	size: EditorSize,
+	/// The window that contains the editor.
+	parent: ParentWindow,
 }
 
 /// A loaded VST2 plugin.
@@ -396,7 +398,7 @@ impl Plugin {
 
 		crate::platform::resize_child(parent.handle, size);
 
-		self.editor = Some(Editor { size });
+		self.editor = Some(Editor { size, parent });
 
 		Ok(())
 	}
@@ -405,6 +407,13 @@ impl Plugin {
 	#[must_use]
 	pub fn editor_size_if_open(&self) -> Option<EditorSize> {
 		self.editor.as_ref().map(|editor| editor.size)
+	}
+
+	/// Fits the plugin's editor child to the current client area of its host window.
+	pub fn resize_editor_child_to_parent(&self) {
+		if let Some(editor) = &self.editor {
+			crate::platform::resize_child_to_parent(editor.parent.handle);
+		}
 	}
 
 	/// Takes the editor out of its window, and forgets it. Does nothing if there's none.
