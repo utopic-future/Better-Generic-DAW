@@ -15,7 +15,7 @@ impl ArrangementView {
 				scrollable(
 					row![
 						(!self.arrangement.tracks().is_empty()).then(|| column![
-							text("TRACKS").size(11).font(Font::DEFAULT.weight(Weight::Bold)),
+							text("TRACKS").size(11),
 							sweeten::row(
 								self.arrangement
 									.tracks()
@@ -36,7 +36,7 @@ impl ArrangementView {
 						.spacing(3)),
 						(!self.arrangement.channels().is_empty()).then(|| rule::vertical(1)),
 						(!self.arrangement.channels().is_empty()).then(|| column![
-							text("BUSES").size(11).font(Font::DEFAULT.weight(Weight::Bold)),
+							text("BUSES").size(11),
 							sweeten::row(
 								self.arrangement
 									.channels()
@@ -76,9 +76,7 @@ impl ArrangementView {
 					container(
 						row![
 							column![
-								text(&*node.name)
-									.size(16)
-									.font(Font::DEFAULT.weight(Weight::Bold)),
+								text(&*node.name).size(16),
 								text(format!("{} effects", node.plugins.len())).size(12),
 							]
 							.spacing(2),
