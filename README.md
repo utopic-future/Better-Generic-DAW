@@ -1,57 +1,57 @@
-<div align="center">
+# Better Generic DAW
 
-# Generic DAW A
+[![CI](https://img.shields.io/github/actions/workflow/status/utopic-future/Better-Generic-DAW/rust.yml?style=for-the-badge&label=CI)](https://github.com/utopic-future/Better-Generic-DAW/actions/workflows/rust.yml)
+[![License: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0-blue.svg?style=for-the-badge)](LICENSE)
 
-[![Iced](https://img.shields.io/badge/0.15-blue?logo=iced&style=for-the-badge)](https://github.com/iced-rs/iced)
-[![GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg?style=for-the-badge)](https://github.com/generic-daw/generic-daw/blob/master/LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/generic-daw/generic-daw/rust.yml?style=for-the-badge&label=CI)](https://github.com/generic-daw/generic-daw/actions/workflows/rust.yml)
-[![Deps](https://deps.rs/repo/github/generic-daw/generic-daw/status.svg?style=for-the-badge)](https://deps.rs/repo/github/generic-daw/generic-daw)
+**Better Generic DAW** is an independent fork of [Generic DAW](https://github.com/generic-daw/generic-daw), an open-source digital audio workstation written in Rust. Development here focuses on UI performance, usability, and workflow improvements.
 
-An early-in-development, open source, cross-platform digital audio workstation (DAW) built in Rust.
-</div>
+This project is in active development. Features and behavior may change.
 
-![screenshot](assets/screenshot.png)
+## Features
 
-## Running
+- Arrange and edit audio and MIDI clips.
+- Record audio and MIDI; edit MIDI in the piano roll.
+- Mix and route tracks and channels.
+- Host CLAP, VST2, and VST3 plugins.
+- Use configurable keyboard shortcuts.
+- Play notes with the computer keyboard: select a track, then press **Caps Lock** to toggle MIDI keyboard mode. The Z/S/X/D/C/V/G/B/H/N/J/M and Q/2/W/3/E/R/5/T/6/Y/7/U keys play two chromatic octaves.
 
-### Download
+## Build from source
 
-Binaries are built for x64 Windows and Linux, as well as ARM MacOS. If you're signed in to GitHub, they are downloadable from the [automated builds](https://github.com/generic-daw/generic-daw/actions/workflows/rust.yml?query=branch:main) page. Alternatively, if you're not signed in to GitHub, they are downloadable from [here](https://nightly.link/generic-daw/generic-daw/workflows/rust/main).
+### Requirements
 
-### Build from Source
-
-#### 1. Requirements
-
-- Rust & Cargo: Generic DAW is developed using the latest stable [Rust toolchain](https://rustup.rs)
-- on Linux you'll also need to install the ALSA and PipeWire development headers:
-  - Debian: `sudo apt install libasound2-dev libpipewire-0.3-dev`
+- Rust and Cargo from the [stable Rust toolchain](https://rustup.rs).
+- On Linux, install the ALSA and PipeWire development packages:
+  - Debian or Ubuntu: `sudo apt install libasound2-dev libpipewire-0.3-dev`
   - Fedora: `sudo dnf install alsa-lib-devel pipewire-devel`
-  - Arch: `sudo pacman -S alsa-lib libpipewire`
+  - Arch Linux: `sudo pacman -S alsa-lib libpipewire`
+- Download the Lucide icon font into the repository root before building. The build script subsets it for the app.
 
-#### 2. Compiling
+### Clone and build
 
-Run the following shell commands to clone the source code and compile a release build:
-
-```
-git clone https://github.com/generic-daw/generic-daw.git
-cd generic-daw
-curl https://unpkg.com/lucide-static@latest/font/Lucide.ttf -Lo Lucide.ttf
+```sh
+git clone https://github.com/utopic-future/Better-Generic-DAW.git
+cd Better-Generic-DAW
+curl -L https://unpkg.com/lucide-static@latest/font/Lucide.ttf -o Lucide.ttf
 cargo build --release
 ```
 
-The binary will then be located at `./target/release/generic_daw`.
+In Windows PowerShell, use this command to download the font:
 
-## Roadmap
+```powershell
+Invoke-WebRequest -Uri https://unpkg.com/lucide-static@latest/font/Lucide.ttf -OutFile Lucide.ttf
+```
 
-See the current development status and future plans in the dedicated [GitHub project](https://github.com/orgs/generic-daw/projects/1).
+The executable is written to `target/release/generic_daw` (`target/release/generic_daw.exe` on Windows).
+
+## Builds
+
+GitHub Actions checks the workspace on Ubuntu, Windows, and macOS. Runs on the `main` branch also build platform binaries and upload them as workflow artifacts; this fork does not currently publish versioned releases. See [Actions](https://github.com/utopic-future/Better-Generic-DAW/actions).
 
 ## Contributing
 
-Contributions are welcome both on [GitHub](https://github.com/generic-daw/generic-daw) and [Codeberg](https://codeberg.org/generic-daw/generic-daw). If you'd like to work on a larger feature or bugfix, coordinating your work with what I'm currently doing is generally a good idea, to ensure conflicts stay at a minimum. If that's the case, feel free to get in touch via a [GitHub discussion](https://github.com/generic-daw/generic-daw/discussions) or on Discord.
-
-This project adheres to the [Rust Audio AI policy](https://rust.audio/community/ai).
+Please open issues and pull requests in this repository. For the upstream project, see [Generic DAW](https://github.com/generic-daw/generic-daw).
 
 ## License
 
-Generic DAW is licensed under the [GPLv3 License](https://www.gnu.org/licenses/gpl-3.0).
-By contributing to Generic DAW, you agree that your contributions will be licensed under the GPLv3 as well.
+This fork is distributed under GPL-3.0-only. See [LICENSE](LICENSE).

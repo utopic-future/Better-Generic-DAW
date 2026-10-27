@@ -5,7 +5,7 @@ use iced_widget::{
 		Theme, Vector, Widget,
 		animation::Easing,
 		layout::{Limits, Node},
-		mouse::Cursor,
+		mouse::{self, Cursor, Interaction},
 		renderer::{Quad, Style},
 		time::{Duration, Instant},
 		widget::Tree,
@@ -25,6 +25,7 @@ pub struct State {
 	last_update: Instant,
 	now: Cell<Instant>,
 	delay: Instant,
+	clipped: Cell<bool>,
 }
 
 impl Default for State {
@@ -36,12 +37,17 @@ impl Default for State {
 			last_update: now,
 			now: Cell::new(now),
 			delay: now,
+			clipped: Cell::new(false),
 		}
 	}
 }
 
 impl State {
 	pub fn update(&mut self, peak: f32, now: Instant) {
+		if peak >= 1.0 {
+			self.clipped.set(true);
+		}
+
 		let peak = peak.cbrt() / MAX_VOL;
 
 		let min_duration = now - self.last_update;
@@ -113,8 +119,8 @@ impl<Message> Widget<Message, Theme, Renderer> for PeakMeter<'_> {
 		&mut self,
 		_tree: &mut Tree,
 		event: &Event,
-		_layout: Layout<'_>,
-		_cursor: Cursor,
+		layout: Layout<'_>,
+		cursor: Cursor,
 		_renderer: &Renderer,
 		shell: &mut Shell<'_, Message>,
 		_viewport: &Rectangle,
@@ -125,6 +131,34 @@ impl<Message> Widget<Message, Theme, Renderer> for PeakMeter<'_> {
 			if self.state.bar.is_animating(now) || self.state.line.is_animating(now) {
 				shell.request_redraw();
 			}
+		}
+
+		if self.state.clipped.get()
+			&& let Event::Mouse(mouse::Event::ButtonPressed {
+				button: mouse::Button::Left,
+				..
+			}) = event
+			&& let Some(position) = cursor.position()
+			&& layout.bounds().contains(position)
+		{
+			self.state.clipped.set(false);
+			shell.capture_event();
+			shell.request_redraw();
+		}
+	}
+
+	fn mouse_interaction(
+		&self,
+		_tree: &Tree,
+		layout: Layout<'_>,
+		cursor: Cursor,
+		_viewport: &Rectangle,
+		_renderer: &Renderer,
+	) -> Interaction {
+		if self.state.clipped.get() && cursor.is_over(layout.bounds()) {
+			Interaction::Pointer
+		} else {
+			Interaction::Idle
 		}
 	}
 
@@ -242,6 +276,19 @@ impl<Message> Widget<Message, Theme, Renderer> for PeakMeter<'_> {
 				} else {
 					success
 				},
+			);
+		}
+
+		if self.state.clipped.get() {
+			renderer.fill_quad(
+				Quad {
+					bounds: Rectangle::new(
+						bounds.position(),
+						Size::new(bounds.width, bounds.height.min(4.0)),
+					),
+					..Quad::default()
+				},
+				danger,
 			);
 		}
 	}

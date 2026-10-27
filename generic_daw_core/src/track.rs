@@ -21,6 +21,42 @@ use std::sync::atomic::Ordering;
 /// by live MIDI input, so that it never collides with them.
 const PREVIEW_NOTE_ID: u32 = i32::MAX as u32;
 
+/// Keyboard notes use the unused portion of the live-note ID range.
+const KEYBOARD_NOTE_ID_BASE: u32 = (i32::MAX - 32751) as u32;
+
+#[derive(Clone, Copy, Debug, Default)]
+enum KeyboardVoice {
+	#[default]
+	Off,
+	PendingOn(u7),
+	On(u7),
+	PendingOff(u7),
+	Retrigger { old_velocity: u7, new_velocity: u7 },
+}
+
+impl KeyboardVoice {
+	fn take_events(&mut self) -> (Option<u7>, Option<u7>) {
+		match *self {
+			Self::PendingOn(velocity) => {
+				*self = Self::On(velocity);
+				(None, Some(velocity))
+			}
+			Self::PendingOff(velocity) => {
+				*self = Self::Off;
+				(Some(velocity), None)
+			}
+			Self::Retrigger {
+				old_velocity,
+				new_velocity,
+			} => {
+				*self = Self::On(new_velocity);
+				(Some(old_velocity), Some(new_velocity))
+			}
+			Self::Off | Self::On(_) => (None, None),
+		}
+	}
+}
+
 /// A note that is being previewed through the track's instrument chain.
 #[derive(Clone, Copy, Debug)]
 struct PreviewVoice {
@@ -134,6 +170,8 @@ pub struct Track {
 	channel: Channel,
 	/// The note that is being previewed right now, if any.
 	preview: Preview,
+	/// Notes held by the computer MIDI keyboard, indexed by MIDI pitch.
+	keyboard_notes: [KeyboardVoice; 128],
 }
 
 impl Track {
@@ -148,6 +186,7 @@ impl Track {
 			midi_producer: None,
 			channel: Channel::new(output),
 			preview: Preview::default(),
+			keyboard_notes: [KeyboardVoice::Off; 128],
 		}
 	}
 
@@ -223,6 +262,8 @@ impl Track {
 				}
 			}
 
+			self.process_keyboard_notes(state, events);
+
 			if self.input.fits_in(state.transport.input_channels) {
 				let audio = if self.input.enable_audio {
 					&mut *audio
@@ -263,6 +304,60 @@ impl Track {
 
 		self.channel
 			.process(state, audio, events, scratch, injector)
+	}
+
+	fn process_keyboard_notes(&mut self, state: &State, events: &mut Vec<Event>) {
+		let position = state.transport.position.to_beat_time(&state.transport);
+
+		for (key, voice) in self.keyboard_notes.iter_mut().enumerate() {
+			let (off, on) = voice.take_events();
+			let key = key as u8;
+			let note_id = Match::Specific(KEYBOARD_NOTE_ID_BASE + u32::from(key));
+
+			if let Some(velocity) = off {
+				events.push(Event::Off {
+					time: 0,
+					key,
+					velocity: f32::from(velocity.as_int()) / 127.0,
+					note_id,
+					flags: EventFlags::IS_LIVE,
+				});
+
+				if state.transport.playing
+					&& let Some(producer) = &mut self.midi_producer
+					&& producer
+						.push(TimedMidiAction {
+							ts: position,
+							action: MidiAction::NoteOff(u4::new(0), u7::new(key), u7::new(0)),
+						})
+					.is_err()
+				{
+					warn!("full ring buffer");
+				}
+			}
+
+			if let Some(velocity) = on {
+				events.push(Event::On {
+					time: 0,
+					key,
+					velocity: f32::from(velocity.as_int()) / 127.0,
+					note_id,
+					flags: EventFlags::IS_LIVE,
+				});
+
+				if state.transport.playing
+					&& let Some(producer) = &mut self.midi_producer
+					&& producer
+						.push(TimedMidiAction {
+							ts: position,
+							action: MidiAction::NoteOn(u4::new(0), u7::new(key), velocity),
+						})
+					.is_err()
+				{
+					warn!("full ring buffer");
+				}
+			}
+		}
 	}
 
 	#[must_use]
@@ -465,6 +560,29 @@ impl Track {
 					updates.push(Update::MidiRecordingInterrupted(self.channel.id()));
 				}
 			}
+			NodeAction::MidiKeyboard(action) => {
+				let key = action.key().as_int() as usize;
+				let current = self.keyboard_notes[key];
+
+				self.keyboard_notes[key] = match action {
+					MidiAction::NoteOn(_, _, velocity) if velocity.as_int() != 0 => match current {
+						KeyboardVoice::Off => KeyboardVoice::PendingOn(velocity),
+						KeyboardVoice::PendingOff(old_velocity) => KeyboardVoice::Retrigger {
+							old_velocity,
+							new_velocity: velocity,
+						},
+						voice => voice,
+					},
+					MidiAction::NoteOn(_, _, _) | MidiAction::NoteOff(_, _, _) => match current {
+						KeyboardVoice::PendingOn(_) => KeyboardVoice::Off,
+						KeyboardVoice::On(velocity) => KeyboardVoice::PendingOff(velocity),
+						KeyboardVoice::Retrigger { old_velocity, .. } => {
+							KeyboardVoice::PendingOff(old_velocity)
+						}
+						voice => voice,
+					},
+				};
+			}
 			NodeAction::MidiPreview(preview) => {
 				let Some(preview) = preview else {
 					self.preview.stop();
@@ -513,6 +631,7 @@ impl Track {
 			midi_producer: None,
 			channel,
 			preview: Preview::default(),
+			keyboard_notes: [KeyboardVoice::Off; 128],
 		}
 	}
 

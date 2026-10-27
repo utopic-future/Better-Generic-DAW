@@ -146,6 +146,8 @@ pub enum NodeAction {
 
 	/// Starts or stops a note that is previewed through the node's instrument chain.
 	MidiPreview(Option<MidiPreview>),
+	/// Starts or stops a note played by the computer MIDI keyboard.
+	MidiKeyboard(MidiAction),
 }
 
 #[derive(Clone, Copy, Debug)]
