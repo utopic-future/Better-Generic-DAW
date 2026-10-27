@@ -28,9 +28,4 @@ impl MeshBudget {
 		BUDGET_REMAINING.store(MESH_BUDGET_PER_FRAME, Ordering::Release);
 	}
 
-	/// Check if any budget remains.
-	#[must_use]
-	pub fn has_budget() -> bool {
-		BUDGET_REMAINING.load(Ordering::Acquire) > 0
-	}
 }
