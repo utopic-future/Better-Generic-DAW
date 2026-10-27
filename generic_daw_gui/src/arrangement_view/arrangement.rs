@@ -18,8 +18,8 @@ use crate::{
 };
 use generic_daw_core::{
 	AudioClip, AudioPreview, AudioProcessor, AudioThread, Batch, Channels, Clip, ClipId, Message,
-	MidiClip, MidiKey, MidiNote, MidiNoteId, MidiPatternAction, MidiPatternId, MidiPreview,
-	NodeAction, NodeId, NodeImpl as _, PanMode, Point, PullSlot, PushSlot, SampleId, Streams,
+	MidiAction, MidiClip, MidiKey, MidiNote, MidiNoteId, MidiPatternAction, MidiPatternId, MidiPreview,
+	NodeAction, NodeId, NodeImpl as _, PanMode, Point, PullSlot, PushSlot, SampleId, Streams, u4, u7,
 	ThreadPool, TimedMidiAction, Transport, Update, Version, build_streams,
 	clap_host::{ClapId, HostInfo},
 	time::{BeatRange, BeatTime, SecondsTime},
@@ -720,6 +720,26 @@ impl Arrangement {
 	}
 
 	/// Stops the note that is being previewed on the track, if any.
+	/// Starts or stops a note sent by the computer MIDI keyboard.
+	pub fn midi_keyboard_note_on(&mut self, id: NodeId, key: MidiKey, velocity: f32) {
+		let velocity = (velocity * 127.0).round().clamp(1.0, 127.0) as u8;
+		self.node_action(
+			id,
+			NodeAction::MidiKeyboard(MidiAction::NoteOn(
+				u4::new(0),
+				u7::new(key.0),
+				u7::new(velocity),
+			)),
+		);
+	}
+
+	pub fn midi_keyboard_note_off(&mut self, id: NodeId, key: MidiKey) {
+		self.node_action(
+			id,
+			NodeAction::MidiKeyboard(MidiAction::NoteOff(u4::new(0), u7::new(key.0), u7::new(0))),
+		);
+	}
+
 	pub fn stop_midi_preview(&mut self, id: NodeId) {
 		if let Some((_, preview)) = self.midi_preview
 			&& preview == id
