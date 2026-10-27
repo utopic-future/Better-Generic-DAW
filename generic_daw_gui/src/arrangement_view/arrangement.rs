@@ -1253,7 +1253,8 @@ impl Arrangement {
 	}
 
 	/// Gives a clip its own audio sample or MIDI pattern while preserving its
-	/// position and other clip settings.
+	/// position and other clip settings. The old media reference is retained for
+	/// the caller's undo record.
 	pub fn make_clip_unique(&mut self, track: usize, clip: usize) -> bool {
 		let Some(clip_data) = self
 			.tracks
