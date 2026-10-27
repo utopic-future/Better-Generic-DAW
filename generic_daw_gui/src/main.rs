@@ -8,6 +8,7 @@ use state::State;
 use std::{backtrace::Backtrace, fs::File, io::Write as _, sync::Arc};
 
 mod action;
+mod app_icon;
 mod arrangement_view;
 mod clap_host;
 mod components;
