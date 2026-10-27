@@ -2,27 +2,30 @@ use iced::window;
 
 const SIZE: usize = 128;
 const PIXEL_BYTES: usize = 4;
+const BACKGROUND: [u8; PIXEL_BYTES] = [17, 25, 40, 255];
+const PULSE: [u8; PIXEL_BYTES] = [88, 231, 202, 255];
 
-/// Builds a small mixer-and-waveform mark for the application window.
+/// Builds the flat pulse mark used for the application window.
 pub fn window_icon() -> window::Icon {
 	let mut pixels = vec![0; SIZE * SIZE * PIXEL_BYTES];
+	fill_rounded_rect(&mut pixels, 4, 4, 124, 124, 28, BACKGROUND);
 
-	fill_rounded_rect(&mut pixels, 4, 4, 124, 124, 28, [17, 25, 40, 255]);
+	let pulse = [
+		(14, 66),
+		(43, 66),
+		(56, 66),
+		(65, 41),
+		(75, 91),
+		(87, 54),
+		(94, 66),
+		(114, 66),
+	];
 
-	let track = [49, 66, 86, 255];
-	for x in [34, 64, 94] {
-		fill_rounded_rect(&mut pixels, x - 4, 25, x + 4, 80, 4, track);
-	}
-
-	fill_rounded_rect(&mut pixels, 23, 37, 45, 52, 5, [65, 217, 194, 255]);
-	fill_rounded_rect(&mut pixels, 53, 55, 75, 70, 5, [105, 166, 255, 255]);
-	fill_rounded_rect(&mut pixels, 83, 32, 105, 47, 5, [177, 139, 255, 255]);
-
-	let waveform = [8, 16, 23, 12, 20, 27, 14, 22, 10];
-	for (index, height) in waveform.into_iter().enumerate() {
-		let x = 25 + index * 10;
-		let top = 101 - height / 2;
-		fill_rounded_rect(&mut pixels, x, top, x + 4, top + height, 2, [184, 207, 230, 255]);
+	for segment in pulse.windows(2) {
+		let [(x0, y0), (x1, y1)] = segment else {
+			continue;
+		};
+		draw_line(&mut pixels, *x0, *y0, *x1, *y1, 7, PULSE);
 	}
 
 	window::icon::from_rgba(pixels, SIZE as u32, SIZE as u32)
@@ -56,9 +59,45 @@ fn fill_rounded_rect(
 			};
 
 			if dx * dx + dy * dy <= radius * radius {
-				let offset = (y * SIZE + x) * PIXEL_BYTES;
-				pixels[offset..offset + PIXEL_BYTES].copy_from_slice(&color);
+				set_pixel(pixels, x as i32, y as i32, color);
 			}
 		}
 	}
+}
+
+fn draw_line(
+	pixels: &mut [u8],
+	x0: i32,
+	y0: i32,
+	x1: i32,
+	y1: i32,
+	thickness: i32,
+	color: [u8; PIXEL_BYTES],
+) {
+	let dx = x1 - x0;
+	let dy = y1 - y0;
+	let steps = dx.abs().max(dy.abs());
+	let radius = thickness / 2;
+
+	for step in 0..=steps {
+		let x = x0 + dx * step / steps;
+		let y = y0 + dy * step / steps;
+
+		for offset_y in -radius..=radius {
+			for offset_x in -radius..=radius {
+				if offset_x * offset_x + offset_y * offset_y <= radius * radius {
+					set_pixel(pixels, x + offset_x, y + offset_y, color);
+				}
+			}
+		}
+	}
+}
+
+fn set_pixel(pixels: &mut [u8], x: i32, y: i32, color: [u8; PIXEL_BYTES]) {
+	if x < 0 || y < 0 || x >= SIZE as i32 || y >= SIZE as i32 {
+		return;
+	}
+
+	let offset = (y as usize * SIZE + x as usize) * PIXEL_BYTES;
+	pixels[offset..offset + PIXEL_BYTES].copy_from_slice(&color);
 }
