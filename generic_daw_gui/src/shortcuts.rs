@@ -110,6 +110,8 @@ pub enum Action {
 	SelectInverse,
 	/// Copy what is selected.
 	Duplicate,
+	/// Give a clip its own audio sample or MIDI pattern.
+	MakeUnique,
 	/// Transpose what is selected an octave up.
 	TransposeOctaveUp,
 	/// Transpose what is selected an octave down.
@@ -146,7 +148,7 @@ pub enum Action {
 
 impl Action {
 	/// All the actions, in the order they are shown in.
-	pub const ALL: [Self; 47] = [
+	pub const ALL: [Self; 48] = [
 		Self::TogglePlayback,
 		Self::Stop,
 		Self::ToggleFullscreen,
@@ -180,6 +182,7 @@ impl Action {
 		Self::SelectAll,
 		Self::SelectInverse,
 		Self::Duplicate,
+		Self::MakeUnique,
 		Self::TransposeOctaveUp,
 		Self::TransposeOctaveDown,
 		Self::Invert,
@@ -209,6 +212,7 @@ impl Action {
 			| Self::SelectAll
 			| Self::SelectInverse
 			| Self::Duplicate
+			| Self::MakeUnique
 			| Self::TransposeOctaveUp
 			| Self::TransposeOctaveDown
 			| Self::Invert
@@ -264,6 +268,7 @@ impl Action {
 			Self::SelectAll => "Select all",
 			Self::SelectInverse => "Invert selection",
 			Self::Duplicate => "Duplicate",
+			Self::MakeUnique => "Make unique",
 			Self::TransposeOctaveUp => "Transpose up an octave",
 			Self::TransposeOctaveDown => "Transpose down an octave",
 			Self::Invert => "Invert",
@@ -287,6 +292,7 @@ impl Action {
 			self,
 			Self::Delete
 				| Self::Escape
+				| Self::MakeUnique
 				| Self::SelectAll
 				| Self::SelectInverse
 				| Self::ClosePluginPicker
@@ -767,6 +773,10 @@ const DEFAULTS: &[(Action, &[Chord])] = &[
 		&[Chord::commanded_shifted(Key::Character('a'))],
 	),
 	(Action::Duplicate, &[Chord::commanded(Key::Character('d'))]),
+	(
+		Action::MakeUnique,
+		&[Chord::commanded_shifted(Key::Character('d'))],
+	),
 	(
 		Action::TransposeOctaveUp,
 		&[Chord::commanded(Key::Named(NamedKey::ArrowUp))],
