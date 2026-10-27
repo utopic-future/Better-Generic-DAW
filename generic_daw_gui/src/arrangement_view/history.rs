@@ -26,6 +26,14 @@ impl ClipSnapshot {
 	}
 }
 
+fn same_clip_resource(a: Clip, b: Clip) -> bool {
+	match (a, b) {
+		(Clip::Audio(a), Clip::Audio(b)) => a.sample == b.sample,
+		(Clip::Midi(a), Clip::Midi(b)) => a.pattern == b.pattern,
+		_ => false,
+	}
+}
+
 /// Something that can be undone.
 #[derive(Clone, Copy, Debug)]
 pub enum Edit {
@@ -238,6 +246,21 @@ impl Edit {
 				detached: true,
 				..
 			} => arrangement.release_clip(clip),
+			Self::ClipModify { before, after }
+				if !same_clip_resource(before.clip, after.clip) =>
+			{
+				let current = arrangement
+					.clip_location(before.clip.id())
+					.map(|(track, clip)| arrangement.tracks()[track].clips[clip]);
+				let retained = if current
+					.is_some_and(|clip| same_clip_resource(clip, before.clip))
+				{
+					after.clip
+				} else {
+					before.clip
+				};
+				arrangement.release_clip(retained);
+			}
 			_ => {}
 		}
 	}
