@@ -2881,6 +2881,24 @@ impl ArrangementView {
 		changed
 	}
 
+	/// Plays notes through the currently selected track while the computer MIDI keyboard is active.
+	pub fn midi_keyboard_note_on(&mut self, key: MidiKey, velocity: f32) -> Option<NodeId> {
+		let id = self
+			.arrangement
+			.tracks()
+			.iter()
+			.find(|track| track.id == self.selected)?
+			.id;
+		self.arrangement.midi_keyboard_note_on(id, key, velocity);
+		Some(id)
+	}
+
+	pub fn midi_keyboard_note_off(&mut self, id: NodeId, key: MidiKey) {
+		if self.arrangement.track_of(id).is_some() {
+			self.arrangement.midi_keyboard_note_off(id, key);
+		}
+	}
+
 	/// Plays a note through the instrument chain of the track the piano roll belongs to.
 	fn preview_midi_note(&mut self, key: MidiKey, velocity: f32) {
 		let Some((track, _)) = self.midi_clip_id else {
