@@ -22,29 +22,64 @@ impl ArrangementView {
 			text("No routing targets available").size(12).into()
 		} else {
 			sweeten::column(routing_targets.iter().map(|target_id| {
-				let target = self.arrangement.node(*target_id);
-				let mix = node.outgoing.get(target_id).copied();
+				let target_id = *target_id;
+				let target = self.arrangement.node(target_id);
+				let mix = node.outgoing.get(&target_id).copied();
 
-				row![
-					text(&*target.name).width(Fill),
-					text(mix.map_or_else(|| "Not connected".to_owned(), |mix| format_mix(mix)))
-						.size(12),
-					icon_button(
-						if mix.is_some() { check() } else { plus() },
-						if mix.is_some() {
-							button::primary
+				let mix_slider: Element<'a, Message> = if let Some(mix) = mix {
+					ContextMenu::new(
+						slider(0.0..=1.0, mix.cbrt(), move |value| {
+							Message::SetMix(node.id, target_id, value.powi(3))
+						})
+						.default(1.0)
+						.step(f32::EPSILON)
+						.handle((4, 4))
+						.height(14)
+						.style(if enabled {
+							slider::primary
 						} else {
-							button::secondary
-						}
+							slider::secondary
+						}),
+						move || {
+							container(menu_entry(rotate_ccw(), "Reset", "Ctrl-Click")
+								.on_press(Message::SetMix(node.id, target_id, 1.0)))
+							.width(160)
+							.style(container_with_radius(weaker_bordered_box, 5))
+							.into()
+						},
 					)
-					.on_press(if mix.is_some() {
-						Message::Disconnect(node.id, *target_id)
-					} else {
-						Message::Connect(node.id, *target_id)
-					}),
+					.into()
+				} else {
+					space().height(0).into()
+				};
+
+				column![
+					row![
+						text(&*target.name).width(Fill),
+						text(mix.map_or_else(
+							|| "Not connected".to_owned(),
+							|mix| format_mix(mix),
+						))
+						.size(12),
+						icon_button(
+							if mix.is_some() { check() } else { plus() },
+							if mix.is_some() {
+								button::primary
+							} else {
+								button::secondary
+							}
+						)
+						.on_press(if mix.is_some() {
+							Message::Disconnect(node.id, target_id)
+						} else {
+							Message::Connect(node.id, target_id)
+						}),
+					]
+					.align_y(Center)
+					.spacing(5),
+					mix_slider,
 				]
-				.align_y(Center)
-				.spacing(5)
+				.spacing(2)
 				.into()
 			}))
 			.spacing(3)
