@@ -119,9 +119,9 @@ impl<Message> Widget<Message, Theme, Renderer> for PeakMeter<'_> {
 		&mut self,
 		_tree: &mut Tree,
 		event: &Event,
-		_layout: Layout<'_>,
+		layout: Layout<'_>,
 		cursor: Cursor,
-		renderer: &Renderer,
+		_renderer: &Renderer,
 		shell: &mut Shell<'_, Message>,
 		_viewport: &Rectangle,
 	) {
