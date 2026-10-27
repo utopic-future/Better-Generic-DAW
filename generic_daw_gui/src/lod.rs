@@ -7,13 +7,14 @@ use iced::{
 		mesh::{Indexed, SolidVertex2D},
 	},
 };
+use std::sync::Arc;
 use utils::NoDebug;
 
 const STEP_SIZE: usize = 3;
 const CHUNK_SIZE: usize = 1 << STEP_SIZE;
 
 #[derive(Clone, Debug)]
-pub struct Lods(NoDebug<Box<[Box<[(f32, f32)]>]>>);
+pub struct Lods(NoDebug<Arc<[Box<[(f32, f32)]>]>>);
 
 impl Lods {
 	pub fn new(samples: &[[f32; 2]]) -> Self {
@@ -124,13 +125,13 @@ impl LodsBuilder {
 	}
 
 	pub fn finalize(self) -> Lods {
-		Lods(NoDebug(
-			self.0
-				.0
-				.into_iter()
-				.map(Vec::into_boxed_slice)
-				.collect::<Box<_>>(),
-		))
+		let lods: Box<[Box<[(f32, f32)]>]> = self
+			.0
+			.0
+			.into_iter()
+			.map(Vec::into_boxed_slice)
+			.collect::<Box<_>>();
+		Lods(NoDebug(Arc::from(lods)))
 	}
 }
 

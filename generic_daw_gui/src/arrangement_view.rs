@@ -188,6 +188,7 @@ pub enum Message {
 	ToggleEnabled(Tab),
 	ToggleSolo(Tab),
 	Duplicate(Tab),
+	MakeUnique(Tab),
 	Delete(Tab),
 	Invert(Tab),
 	Reverse(Tab),
@@ -1127,6 +1128,43 @@ impl ArrangementView {
 					}
 				}
 			},
+			Message::MakeUnique(tab) => match tab {
+				Tab::Playlist => {
+					let clips = {
+						let playlist = self.playlist.get_mut();
+						playlist.finish();
+						playlist.primary.iter().copied().collect::<Vec<_>>()
+					};
+
+					for (track, clip) in clips {
+						let before = history::ClipSnapshot::of(&self.arrangement, track, clip);
+						if self.arrangement.make_clip_unique(track, clip)
+							&& let Some(before) = before
+						{
+							history::record_clip_change(
+								&mut self.arrangement,
+								&mut self.history,
+								before,
+							);
+						}
+					}
+				}
+				Tab::Mixer => {}
+				Tab::PianoRoll => {
+					if let Some((track, clip)) = self.midi_clip_id {
+						let before = history::ClipSnapshot::of(&self.arrangement, track, clip);
+						if self.arrangement.make_clip_unique(track, clip)
+							&& let Some(before) = before
+						{
+							history::record_clip_change(
+								&mut self.arrangement,
+								&mut self.history,
+								before,
+							);
+						}
+					}
+				}
+			},
 			Message::Delete(tab) => match tab {
 				Tab::Playlist => {
 					self.playlist.get_mut().finish();
@@ -1694,6 +1732,9 @@ impl ArrangementView {
 			playlist::ClipAction::Duplicate => {
 				self.handle_playlist_action(playlist::Action::Clone, config, state)
 			}
+			playlist::ClipAction::MakeUnique => {
+				self.update(Message::MakeUnique(Tab::Playlist), config, state)
+			}
 			playlist::ClipAction::Delete => {
 				self.handle_playlist_action(playlist::Action::Delete, config, state)
 			}
@@ -2020,6 +2061,12 @@ impl ArrangementView {
 				label: "Duplicate".into(),
 				shortcut: shortcuts.label(ShortcutAction::Duplicate),
 				message: Message::ClipAction(track, clip, playlist::ClipAction::Duplicate),
+			},
+			MenuItem::Action {
+				icon: Some(copy()),
+				label: "Make unique".into(),
+				shortcut: shortcuts.label(ShortcutAction::MakeUnique),
+				message: Message::ClipAction(track, clip, playlist::ClipAction::MakeUnique),
 			},
 			MenuItem::Action {
 				icon: Some(trash_2()),
@@ -3247,6 +3294,7 @@ impl ArrangementView {
 			ShortcutAction::SelectAll => Some(Message::SelectAll),
 			ShortcutAction::SelectInverse => Some(Message::SelectInverse),
 			ShortcutAction::Duplicate => Some(Message::Duplicate),
+			ShortcutAction::MakeUnique => Some(Message::MakeUnique),
 			ShortcutAction::TransposeOctaveUp => Some(Message::TransposeOctUp),
 			ShortcutAction::TransposeOctaveDown => Some(Message::TransposeOctDown),
 			ShortcutAction::Invert => Some(Message::Invert),
