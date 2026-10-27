@@ -48,7 +48,7 @@ use iced_split::{Strategy, horizontal_split, vertical_split};
 use log::{error, info, trace, warn};
 use rfd::AsyncFileDialog;
 use smol::{Timer, unblock};
-	use std::{
+use std::{
 	collections::HashMap,
 	convert::Infallible,
 	ffi::CStr,
@@ -2373,7 +2373,7 @@ impl Daw {
 				repeat,
 				..
 			} => {
-				if physical_key == keyboard::key::Code::CapsLock {
+				if physical_key == keyboard::key::Physical::Code(keyboard::key::Code::CapsLock) {
 					if !repeat && self.main_window_focused {
 						self.keyboard_midi_active = !self.keyboard_midi_active;
 						if !self.keyboard_midi_active {
