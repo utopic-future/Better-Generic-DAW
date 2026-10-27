@@ -149,7 +149,7 @@ impl ArrangementView {
 				)
 				.id("mixer")
 				.direction(scrollable::Direction::Horizontal(
-					scrollable::Scrollbar::hidden(),
+					scrollable::Scrollbar::default().spacing(5),
 				))
 			]
 			.spacing(5)
@@ -351,7 +351,7 @@ impl ArrangementView {
 				.spacing(5),
 			)
 			.direction(scrollable::Direction::Vertical(
-				scrollable::Scrollbar::hidden(),
+				scrollable::Scrollbar::default().spacing(5),
 			))
 			.width(Fill.min(MIN_SPLIT_WIDTH)),
 			state.plugins_pane_split_at,
