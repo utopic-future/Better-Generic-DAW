@@ -532,6 +532,13 @@ impl Vst2Host {
 			.map(|hosted| hosted.plugin.descriptor().name.to_string())
 	}
 
+	/// Keeps VST2 editor windows in the plugin's pixel coordinate system.
+	///
+	/// The editor reports pixel dimensions but has no API for negotiating a UI scale.
+	pub fn scale_factor(&self, window: window::Id) -> Option<f32> {
+		self.editor_windows.contains(&window).then_some(1.0)
+	}
+
 	pub fn subscription() -> Subscription<Message> {
 		window::events().filter_map(|(id, event)| match event {
 			window::Event::Resized(size) => Some(Message::WindowResized(id, size)),
