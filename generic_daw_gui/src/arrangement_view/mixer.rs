@@ -14,37 +14,47 @@ impl ArrangementView {
 				(!self.arrangement.tracks().is_empty()).then(|| rule::vertical(1)),
 				scrollable(
 					row![
-						(!self.arrangement.tracks().is_empty()).then(|| sweeten::row(
-							self.arrangement
-								.tracks()
-								.iter()
-								.enumerate()
-								.map(|(i, track)| self.view_channel(
-									state,
-									self.arrangement.node(track.id),
-									format!("T{}", i + 1),
-									Some(track)
-								))
-						)
-						.on_drag(Message::TrackMove)
-						.style(sweeten_row_with_radius(sweeten_row_style, border::top(5)))
-						.spacing(5)),
+						(!self.arrangement.tracks().is_empty()).then(|| column![
+							text("TRACKS").size(11).font(Font::DEFAULT.weight(Weight::Bold)),
+							sweeten::row(
+								self.arrangement
+									.tracks()
+									.iter()
+									.enumerate()
+									.map(|(i, track)| self.view_channel(
+										state,
+										self.arrangement.node(track.id),
+										format!("T{}", i + 1),
+										Some(track)
+									))
+							)
+							.on_drag(Message::TrackMove)
+							.style(sweeten_row_with_radius(sweeten_row_style, border::top(5)))
+							.spacing(5)
+						]
+						.align_x(Center)
+						.spacing(3)),
 						(!self.arrangement.channels().is_empty()).then(|| rule::vertical(1)),
-						(!self.arrangement.channels().is_empty()).then(|| sweeten::row(
-							self.arrangement
-								.channels()
-								.iter()
-								.enumerate()
-								.map(|(i, channel)| self.view_channel(
-									state,
-									self.arrangement.node(channel.id),
-									format!("C{}", i + 1),
-									None
-								))
-						)
-						.on_drag(Message::ChannelMove)
-						.style(sweeten_row_with_radius(sweeten_row_style, border::top(5)))
-						.spacing(5)),
+						(!self.arrangement.channels().is_empty()).then(|| column![
+							text("BUSES").size(11).font(Font::DEFAULT.weight(Weight::Bold)),
+							sweeten::row(
+								self.arrangement
+									.channels()
+									.iter()
+									.enumerate()
+									.map(|(i, channel)| self.view_channel(
+										state,
+										self.arrangement.node(channel.id),
+										format!("C{}", i + 1),
+										None
+									))
+							)
+							.on_drag(Message::ChannelMove)
+							.style(sweeten_row_with_radius(sweeten_row_style, border::top(5)))
+							.spacing(5)
+						]
+						.align_x(Center)
+						.spacing(3)),
 						button(plus().size(LINE_HEIGHT + 6.0))
 							.padding(5)
 							.style(button_with_radius(button::primary, f32::INFINITY))
