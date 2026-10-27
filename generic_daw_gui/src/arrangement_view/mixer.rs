@@ -360,8 +360,8 @@ impl ArrangementView {
 								column![
 									space().height(3),
 									row![
-										PeakMeter::new(&node.peaks[0]).width(16.0).enabled(enabled),
-										PeakMeter::new(&node.peaks[1]).width(16.0).enabled(enabled),
+										PeakMeter::new(&node.peaks[0]).width(20.0).enabled(enabled),
+										PeakMeter::new(&node.peaks[1]).width(20.0).enabled(enabled),
 									]
 									.spacing(3),
 									container(space().width(35).height(3)).style(
@@ -388,9 +388,9 @@ impl ArrangementView {
 										)
 									)
 									.default(1f32)
-									.width(17)
+									.width(24)
 									.step(f32::EPSILON)
-									.handle((15, 20))
+									.handle((20, 26))
 									.style(slider_with_radius(
 										if enabled {
 											slider::primary
@@ -586,7 +586,7 @@ impl ArrangementView {
 					.interaction(Interaction::Pointer)
 				)
 			])
-			.width(65)
+			.width(100)
 			.id(node.widget_id.clone())
 			.style(container_with_radius(
 				selectable_box(weakest_bordered_box, node.id == self.selected),
