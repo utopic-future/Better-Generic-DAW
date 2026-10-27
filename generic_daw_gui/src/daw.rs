@@ -155,10 +155,11 @@ pub enum Instruction {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum KeyboardEvent {
+pub enum KeyboardEvent {
 	Pressed {
 		physical_key: keyboard::key::Physical,
 		chord: Option<Chord>,
+		has_modifier: bool,
 		repeat: bool,
 	},
 	Released {
@@ -2273,6 +2274,7 @@ impl Daw {
 				} => Some(Message::Keyboard(KeyboardEvent::Pressed {
 					physical_key,
 					chord: Chord::from_event(&key, physical_key, modifiers),
+					has_modifier: modifiers.command() || modifiers.alt() || modifiers.shift(),
 					repeat,
 				})),
 				keyboard::Event::KeyReleased { physical_key, .. } => {
@@ -2393,6 +2395,7 @@ impl Daw {
 			KeyboardEvent::Pressed {
 				physical_key,
 				chord,
+				has_modifier,
 				repeat,
 			} => {
 				if physical_key == keyboard::key::Physical::Code(keyboard::key::Code::CapsLock) {
@@ -2413,9 +2416,7 @@ impl Daw {
 					&& !self.recovering;
 
 				if midi_keyboard_ready
-					&& !modifiers.command()
-					&& !modifiers.alt()
-					&& !modifiers.shift()
+					&& !has_modifier
 					&& let Some(midi_key) = Self::midi_keyboard_key(physical_key)
 				{
 					if !repeat && !self.keyboard_midi_notes.contains_key(&physical_key)
