@@ -9,16 +9,39 @@ impl ArrangementView {
 			&& (node.ty != NodeType::Track
 				|| self.arrangement.solo().is_none_or(|solo| solo == node.id));
 
-		let routing: Element<'a, Message> = if node.outgoing.is_empty() {
-			text("No outputs connected").size(12).into()
+		let routing_targets = self
+			.arrangement
+			.channels()
+			.iter()
+			.map(|channel| channel.id)
+			.chain(self.arrangement.tracks().iter().map(|track| track.id))
+			.filter(|target| *target != node.id)
+			.collect::<Vec<_>>();
+
+		let routing: Element<'a, Message> = if routing_targets.is_empty() {
+			text("No routing targets available").size(12).into()
 		} else {
-			sweeten::column(node.outgoing.iter().map(|(target, mix)| {
-				let target = self.arrangement.node(*target);
+			sweeten::column(routing_targets.iter().map(|target_id| {
+				let target = self.arrangement.node(*target_id);
+				let mix = node.outgoing.get(target_id).copied();
+
 				row![
 					text(&*target.name).width(Fill),
-					text(format_mix(*mix)).size(12),
-					icon_button(x(), button::secondary)
-						.on_press(Message::Disconnect(node.id, target.id)),
+					text(mix.map_or_else(|| "Not connected".to_owned(), |mix| format_mix(mix)))
+						.size(12),
+					icon_button(
+						if mix.is_some() { check() } else { plus() },
+						if mix.is_some() {
+							button::primary
+						} else {
+							button::secondary
+						}
+					)
+					.on_press(if mix.is_some() {
+						Message::Disconnect(node.id, *target_id)
+					} else {
+						Message::Connect(node.id, *target_id)
+					}),
 				]
 				.align_y(Center)
 				.spacing(5)
