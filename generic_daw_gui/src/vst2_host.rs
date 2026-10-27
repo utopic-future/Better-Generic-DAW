@@ -18,7 +18,7 @@ use fragile::Fragile;
 use generic_daw_core::{
 	AudioBackend, AudioThreadMessage, Transport,
 	clap_host::{ClapId, RenderMode},
-	vst2_host::{AudioConfig, MainThreadMessage, ParentWindow, Plugin},
+	vst2_host::{AudioConfig, EditorSize, MainThreadMessage, ParentWindow, Plugin},
 };
 use generic_daw_widget::{context_menu::ContextMenu, knob::Knob};
 use iced::{
@@ -71,6 +71,7 @@ pub struct Vst2Host {
 	/// The windows that an editor goes in, as opposed to the ones with a list of
 	/// parameters.
 	editor_windows: HashSet<window::Id>,
+	editor_size_of_window: HashMap<window::Id, EditorSize>,
 	scale_factor_of_window: HashMap<window::Id, f32>,
 	offline: bool,
 }
@@ -88,9 +89,26 @@ impl Vst2Host {
 			window_of_plugin: HashMap::new(),
 			plugin_of_window: HashMap::new(),
 			editor_windows: HashSet::new(),
+			editor_size_of_window: HashMap::new(),
 			scale_factor_of_window: HashMap::new(),
 			offline: false,
 		}
+	}
+
+	/// Converts VST2 editor pixels to Iced's logical window dimensions.
+	fn logical_editor_size(&self, window: window::Id, size: EditorSize) -> iced::Size {
+		let scale_factor = self
+			.scale_factor_of_window
+			.get(&window)
+			.copied()
+			.filter(|scale_factor| scale_factor.is_finite() && *scale_factor > 0.0)
+			.unwrap_or(1.0);
+
+		(
+			size.width.max(1) as f32 / scale_factor,
+			size.height.max(1) as f32 / scale_factor,
+		)
+			.into()
 	}
 
 	pub fn update(
@@ -209,6 +227,7 @@ impl Vst2Host {
 				self.window_of_plugin.insert(id, window);
 				self.plugin_of_window.insert(window, id);
 				self.editor_windows.insert(window);
+				self.editor_size_of_window.insert(window, size);
 
 				let mut hosted = Fragile::new(self.plugins.remove(&id).unwrap());
 				let embed = window::run(window, move |window| {
@@ -246,23 +265,37 @@ impl Vst2Host {
 					self.editor_windows.remove(&window);
 					return Task::batch([window::close(window), self.open_parameters(id)]).into();
 				}
+
+				let Some(editor_size) = self
+					.plugins
+					.get(&id)
+					.and_then(|hosted| hosted.plugin.editor_size_if_open())
+				else {
+					return Action::none();
+				};
+				self.editor_size_of_window.insert(window, editor_size);
+				return window::resize(window, self.logical_editor_size(window, editor_size)).into();
 			}
 			Message::WindowResized(window, size) => {
-				// The editor has a size of its own, and the window is made to fit it.
+				// VST2 sizes are pixels; Iced window sizes are logical pixels.
 				if self.editor_windows.contains(&window)
-					&& let Some(&id) = self.plugin_of_window.get(&window)
-					&& let Some(hosted) = self.plugins.get_mut(&id)
-					&& let Some(editor_size) = hosted.plugin.editor_size_if_open()
+					&& let Some(&editor_size) = self.editor_size_of_window.get(&window)
 				{
-					let wanted = (editor_size.width as f32, editor_size.height as f32);
+					let wanted = self.logical_editor_size(window, editor_size);
 
-					if (size.width, size.height) != wanted {
-						return window::resize(window, wanted.into()).into();
+					if (size.width - wanted.width).abs() > 0.5
+						|| (size.height - wanted.height).abs() > 0.5
+					{
+						return window::resize(window, wanted).into();
 					}
 				}
 			}
 			Message::WindowRescaled(window, scale_factor) => {
 				self.scale_factor_of_window.insert(window, scale_factor);
+
+				if let Some(&editor_size) = self.editor_size_of_window.get(&window) {
+					return window::resize(window, self.logical_editor_size(window, editor_size)).into();
+				}
 			}
 			Message::WindowCloseRequested(window) => {
 				if let Some(&id) = self.plugin_of_window.get(&window) {
@@ -283,6 +316,7 @@ impl Vst2Host {
 			}
 			Message::WindowClosed(window) => {
 				self.scale_factor_of_window.remove(&window);
+				self.editor_size_of_window.remove(&window);
 				self.editor_windows.remove(&window);
 
 				if let Some(id) = self.plugin_of_window.remove(&window)
@@ -312,14 +346,23 @@ impl Vst2Host {
 	}
 
 	fn handle_main_thread_message(
-		&self,
+		&mut self,
 		id: PluginId,
 		message: MainThreadMessage,
 	) -> Action<daw::Instruction, Message> {
 		match message {
 			MainThreadMessage::ResizeEditor { width, height } => {
 				if let Some(&window) = self.window_of_plugin.get(&id) {
-					return window::resize(window, (width as f32, height as f32).into()).into();
+					let editor_size = EditorSize {
+						width: width.max(1),
+						height: height.max(1),
+					};
+					self.editor_size_of_window.insert(window, editor_size);
+					return window::resize(
+						window,
+						self.logical_editor_size(window, editor_size),
+					)
+					.into();
 				}
 			}
 		}
