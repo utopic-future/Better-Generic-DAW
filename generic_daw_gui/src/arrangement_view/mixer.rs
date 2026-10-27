@@ -88,7 +88,12 @@ impl ArrangementView {
 
 		Split::new(
 			row![
-				self.view_channel(state, self.arrangement.master(), "M", None),
+				column![
+					text("MASTER").size(11),
+					self.view_channel(state, self.arrangement.master(), "M", None),
+				]
+				.align_x(Center)
+				.spacing(3),
 				(!self.arrangement.tracks().is_empty()).then(|| rule::vertical(1)),
 				scrollable(
 					row![
@@ -133,9 +138,9 @@ impl ArrangementView {
 						]
 						.align_x(Center)
 						.spacing(3)),
-						button(plus().size(LINE_HEIGHT + 6.0))
-							.padding(5)
-							.style(button_with_radius(button::primary, f32::INFINITY))
+						button(row![plus().size(TEXT_HEIGHT), text("Add bus")].align_y(Center).spacing(5))
+							.padding(8)
+							.style(button_with_radius(button::primary, 5))
 							.on_press(Message::ChannelAdd)
 					]
 					.height(Fill)
