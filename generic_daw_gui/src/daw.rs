@@ -2208,6 +2208,7 @@ impl Daw {
 	pub fn scale_factor(&self, window: window::Id) -> f32 {
 		self.clap_host
 			.scale_factor(window)
+			.or_else(|| self.vst2_host.scale_factor(window))
 			.or_else(|| self.vst3_host.scale_factor(window))
 			.unwrap_or(self.config.scale_factor)
 	}
