@@ -45,6 +45,8 @@ struct Editor {
 	size: EditorSize,
 	/// The window that contains the editor.
 	parent: ParentWindow,
+	/// The child window created by the plugin for its editor.
+	child: Option<*mut c_void>,
 }
 
 /// A loaded VST2 plugin.
@@ -386,6 +388,7 @@ impl Plugin {
 		}
 
 		let size = self.editor_size().ok_or(Error::NoEditor)?;
+		let children_before = crate::platform::child_windows(parent.handle);
 
 		let result = self.dispatch(api::opcodes::EDIT_OPEN, 0, 0, parent.handle.cast(), 0.0);
 
@@ -395,10 +398,17 @@ impl Plugin {
 
 		// the plugin may have changed its mind about the size
 		let size = self.editor_size().unwrap_or(size);
+		let child = crate::platform::newly_created_child(parent.handle, &children_before);
 
-		crate::platform::resize_child(parent.handle, size);
+		if let Some(child) = child {
+			crate::platform::resize_child(child, size);
+		}
 
-		self.editor = Some(Editor { size, parent });
+		self.editor = Some(Editor {
+			size,
+			parent,
+			child,
+		});
 
 		Ok(())
 	}
@@ -412,7 +422,9 @@ impl Plugin {
 	/// Fits the plugin's editor child to the current client area of its host window.
 	pub fn resize_editor_child_to_parent(&self) {
 		if let Some(editor) = &self.editor {
-			crate::platform::resize_child_to_parent(editor.parent.handle);
+			if let Some(child) = editor.child {
+				crate::platform::resize_child_to_parent(editor.parent.handle, child);
+			}
 		}
 	}
 
