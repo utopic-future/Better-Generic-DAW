@@ -24,7 +24,7 @@ use crate::{
 	widget::{ALPHA_2_3, LINE_HEIGHT},
 };
 use generic_daw_core::{
-	AudioThread, BpmTapper, NodeId, PullSlot, build_streams,
+	AudioThread, BpmTapper, MidiKey, NodeId, PullSlot, build_streams,
 	clap_host::{
 		ClapId, DEFAULT_CLAP_PATHS, MainThreadMessage, Plugin, RenderMode, StateContextType,
 	},
@@ -48,7 +48,8 @@ use iced_split::{Strategy, horizontal_split, vertical_split};
 use log::{error, info, trace, warn};
 use rfd::AsyncFileDialog;
 use smol::{Timer, unblock};
-use std::{
+	use std::{
+	collections::HashMap,
 	convert::Infallible,
 	ffi::CStr,
 	fs::File,
@@ -163,6 +164,8 @@ pub enum Message {
 	PluginPicker(plugin_picker::Message),
 	ConfigView(config_view::Message),
 
+	Keyboard(keyboard::Event),
+	MainWindowFocus(bool),
 	CloseRequested(window::Id),
 	ProjectLoaded(
 		Box<(
@@ -362,6 +365,11 @@ pub struct Daw {
 
 	/// The keyboard shortcuts that are in effect.
 	shortcuts: Manager,
+	/// Whether Caps Lock has enabled the computer MIDI keyboard.
+	keyboard_midi_active: bool,
+	/// Notes held by physical keys, with the track that received each note.
+	keyboard_midi_notes: HashMap<keyboard::key::Physical, (NodeId, MidiKey)>,
+	main_window_focused: bool,
 
 	/// The state of the plugin that was copied, if there is one.
 	plugin_state: Option<Box<[u8]>>,
@@ -460,6 +468,9 @@ impl Daw {
 			recovering: true,
 
 			shortcuts,
+			keyboard_midi_active: false,
+			keyboard_midi_notes: HashMap::new(),
+			main_window_focused: true,
 			plugin_state: None,
 
 			plugins: plugin_picker::State::read(),
@@ -596,6 +607,13 @@ impl Daw {
 						});
 				}
 			}
+			Message::Keyboard(event) => return self.handle_keyboard_event(event),
+			Message::MainWindowFocus(focused) => {
+				self.main_window_focused = focused;
+				if !focused {
+					self.release_keyboard_midi_notes();
+				}
+			}
 			Message::Shortcut(chord, repeat) => {
 				let Some(message) = self.shortcut(chord, repeat) else {
 					return Task::none();
@@ -616,6 +634,7 @@ impl Daw {
 				}
 			}
 			Message::ProjectLoaded(data) => {
+				self.release_keyboard_midi_notes();
 				let (
 					project,
 					path,
@@ -2214,6 +2233,8 @@ impl Daw {
 	}
 
 	pub fn subscription(&self) -> Subscription<Message> {
+		let main_window_id = self.main_window_id;
+
 		Subscription::batch([
 			self.arrangement_view
 				.subscription()
@@ -2230,24 +2251,20 @@ impl Daw {
 			} else {
 				Subscription::none()
 			},
-			if self.progress.is_none() {
-				keyboard::listen().filter_map(|event| match event {
-					keyboard::Event::KeyPressed {
-						key,
-						physical_key,
-						modifiers,
-						repeat,
-						..
-					} => Chord::from_event(&key, physical_key, modifiers)
-						.map(|chord| Message::Shortcut(chord, repeat)),
-					_ => None,
-				})
-			} else {
-				Subscription::none()
-			},
+			keyboard::listen().filter_map(|event| match event {
+				event @ (keyboard::Event::KeyPressed { .. }
+				| keyboard::Event::KeyReleased { .. }) => Some(Message::Keyboard(event)),
+				_ => None,
+			}),
 			// Reset mesh budget at the start of each frame
 			window::frames().map(|_| Message::GenerateMeshes),
-			window::events().filter_map(|(window, event)| match event {
+			window::events().filter_map(move |(window, event)| match event {
+				window::Event::Focused if window == main_window_id => {
+					Some(Message::MainWindowFocus(true))
+				}
+				window::Event::Unfocused if window == main_window_id => {
+					Some(Message::MainWindowFocus(false))
+				}
 				window::Event::CloseRequested => Some(Message::CloseRequested(window)),
 				window::Event::FileHovered(..) => Some(Message::FileHovered),
 				window::Event::FileDropped(file) => Some(Message::FileDropped(file.into())),
@@ -2345,6 +2362,108 @@ impl Daw {
 		}
 
 		Self::keybinds(action)
+	}
+
+	fn handle_keyboard_event(&mut self, event: keyboard::Event) -> Task<Message> {
+		match event {
+			keyboard::Event::KeyPressed {
+				key,
+				physical_key,
+				modifiers,
+				repeat,
+				..
+			} => {
+				if physical_key == keyboard::key::Code::CapsLock {
+					if !repeat && self.main_window_focused {
+						self.keyboard_midi_active = !self.keyboard_midi_active;
+						if !self.keyboard_midi_active {
+							self.release_keyboard_midi_notes();
+						}
+					}
+					return Task::none();
+				}
+
+				let midi_keyboard_ready = self.keyboard_midi_active
+					&& self.main_window_focused
+					&& self.progress.is_none()
+					&& self.config_view.is_none()
+					&& self.plugin_picker.is_none()
+					&& !self.recovering;
+
+				if midi_keyboard_ready
+					&& !modifiers.command()
+					&& !modifiers.alt()
+					&& !modifiers.shift()
+					&& let Some(midi_key) = Self::midi_keyboard_key(physical_key)
+				{
+					if !repeat && !self.keyboard_midi_notes.contains_key(&physical_key)
+						&& let Some(track) =
+							self.arrangement_view.midi_keyboard_note_on(midi_key, 0.8)
+					{
+						self.keyboard_midi_notes
+							.insert(physical_key, (track, midi_key));
+					}
+					return Task::none();
+				}
+
+				if self.progress.is_none()
+					&& let Some(chord) = Chord::from_event(&key, physical_key, modifiers)
+				{
+					return self.update(Message::Shortcut(chord, repeat));
+				}
+			}
+			keyboard::Event::KeyReleased { physical_key, .. } => {
+				if let Some((track, key)) = self.keyboard_midi_notes.remove(&physical_key) {
+					self.arrangement_view.midi_keyboard_note_off(track, key);
+				}
+			}
+			_ => {}
+		}
+
+		Task::none()
+	}
+
+	fn midi_keyboard_key(physical_key: keyboard::key::Physical) -> Option<MidiKey> {
+		let keyboard::key::Physical::Code(code) = physical_key else {
+			return None;
+		};
+
+		let note = match code {
+			keyboard::key::Code::KeyZ => 48,
+			keyboard::key::Code::KeyS => 49,
+			keyboard::key::Code::KeyX => 50,
+			keyboard::key::Code::KeyD => 51,
+			keyboard::key::Code::KeyC => 52,
+			keyboard::key::Code::KeyV => 53,
+			keyboard::key::Code::KeyG => 54,
+			keyboard::key::Code::KeyB => 55,
+			keyboard::key::Code::KeyH => 56,
+			keyboard::key::Code::KeyN => 57,
+			keyboard::key::Code::KeyJ => 58,
+			keyboard::key::Code::KeyM => 59,
+			keyboard::key::Code::KeyQ => 60,
+			keyboard::key::Code::Digit2 => 61,
+			keyboard::key::Code::KeyW => 62,
+			keyboard::key::Code::Digit3 => 63,
+			keyboard::key::Code::KeyE => 64,
+			keyboard::key::Code::KeyR => 65,
+			keyboard::key::Code::Digit5 => 66,
+			keyboard::key::Code::KeyT => 67,
+			keyboard::key::Code::Digit6 => 68,
+			keyboard::key::Code::KeyY => 69,
+			keyboard::key::Code::Digit7 => 70,
+			keyboard::key::Code::KeyU => 71,
+			_ => return None,
+		};
+
+		Some(MidiKey(note))
+	}
+
+	fn release_keyboard_midi_notes(&mut self) {
+		let notes = std::mem::take(&mut self.keyboard_midi_notes);
+		for (_, (track, key)) in notes {
+			self.arrangement_view.midi_keyboard_note_off(track, key);
+		}
 	}
 
 	/// Quick scan: check if cached plugins still exist, and only scan directories that might have new plugins.
