@@ -31,7 +31,7 @@ impl ArrangementView {
 						slider(0.0..=1.0, mix.cbrt(), move |value| {
 							Message::SetMix(node.id, target_id, value.powi(3))
 						})
-						.default(1.0)
+						.default(1.0_f32)
 						.step(f32::EPSILON)
 						.handle((4, 4))
 						.height(14)
