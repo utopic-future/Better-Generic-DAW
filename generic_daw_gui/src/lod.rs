@@ -125,13 +125,13 @@ impl LodsBuilder {
 	}
 
 	pub fn finalize(self) -> Lods {
-		Lods(NoDebug(Arc::from(
-			self.0
-				.0
-				.into_iter()
-				.map(Vec::into_boxed_slice)
-				.collect::<Box<_>>(),
-		)))
+		let lods: Box<[Box<[(f32, f32)]>]> = self
+			.0
+			.0
+			.into_iter()
+			.map(Vec::into_boxed_slice)
+			.collect::<Box<_>>();
+		Lods(NoDebug(Arc::from(lods)))
 	}
 }
 
