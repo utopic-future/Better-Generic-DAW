@@ -8,6 +8,25 @@ impl ArrangementView {
 			&& (node.ty != NodeType::Track
 				|| self.arrangement.solo().is_none_or(|solo| solo == node.id));
 
+		let routing: Element<'a, Message> = if node.outgoing.is_empty() {
+			text("No outputs connected").size(12).into()
+		} else {
+			sweeten::column(node.outgoing.iter().map(|(target, mix)| {
+				let target = self.arrangement.node(*target);
+				row![
+					text(&*target.name).width(Fill),
+					text(format_mix(*mix)).size(12),
+					icon_button(x(), button::secondary)
+						.on_press(Message::Disconnect(node.id, target.id)),
+				]
+				.align_y(Center)
+				.spacing(5)
+				.into()
+			}))
+			.spacing(3)
+			.into()
+		};
+
 		Split::new(
 			row![
 				self.view_channel(state, self.arrangement.master(), "M", None),
@@ -256,24 +275,7 @@ impl ArrangementView {
 								text(format!("{} outputs", node.outgoing.len())).size(12),
 							]
 							.align_y(Center),
-							if node.outgoing.is_empty() {
-								text("No outputs connected").size(12).into()
-							} else {
-								sweeten::column(node.outgoing.iter().map(|(target, mix)| {
-									let target = self.arrangement.node(*target);
-									row![
-										text(&*target.name).width(Fill),
-										text(format_mix(*mix)).size(12),
-										icon_button(x(), button::secondary)
-										.on_press(Message::Disconnect(node.id, target.id)),
-									]
-									.align_y(Center)
-									.spacing(5)
-									.into()
-								}))
-								.spacing(3)
-								.into()
-							}
+							routing
 						]
 						.spacing(5)
 					)
