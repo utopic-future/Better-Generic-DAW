@@ -1252,6 +1252,86 @@ impl Arrangement {
 		self.add_clip(track, clip)
 	}
 
+	/// Gives a clip its own audio sample or MIDI pattern while preserving its
+	/// position and other clip settings.
+	pub fn make_clip_unique(&mut self, track: usize, clip: usize) -> bool {
+		let Some(clip_data) = self
+			.tracks
+			.get(track)
+			.and_then(|track| track.clips.get(clip))
+			.copied()
+		else {
+			return false;
+		};
+
+		match clip_data {
+			Clip::Audio(audio) => {
+				let uses = self
+					.tracks
+					.iter()
+					.flat_map(|track| &track.clips)
+					.filter(|clip| matches!(clip, Clip::Audio(clip) if clip.sample == audio.sample))
+					.count();
+				if uses <= 1 {
+					return false;
+				}
+
+				let Some(mut sample) = self.samples.get(&audio.sample).cloned() else {
+					return false;
+				};
+				let id = SampleId::unique();
+				sample.id = id;
+				sample.refs = 0;
+				let core = generic_daw_core::Sample {
+					id,
+					samples: sample.samples.clone(),
+					sample_rate: sample.sample_rate,
+				};
+				self.add_sample(SamplePair { core, gui: sample });
+
+				let new_clip = Clip::Audio(AudioClip { sample: id, ..audio });
+				self.add_ref(new_clip);
+				self.replace_clip(track, clip, new_clip);
+			}
+			Clip::Midi(midi) => {
+				let uses = self
+					.tracks
+					.iter()
+					.flat_map(|track| &track.clips)
+					.filter(|clip| matches!(clip, Clip::Midi(clip) if clip.pattern == midi.pattern))
+					.count();
+				if uses <= 1 {
+					return false;
+				}
+
+				let Some(mut pattern) = self.midi_patterns.get(&midi.pattern).cloned() else {
+					return false;
+				};
+				let id = MidiPatternId::unique();
+				pattern.id = id;
+				pattern.refs = 0;
+				for note in &mut pattern.notes {
+					note.id = MidiNoteId::unique();
+				}
+				let mut core = generic_daw_core::MidiPattern::from_notes(&pattern.notes);
+				core.id = id;
+				self.add_midi_pattern(MidiPatternPair {
+					core,
+					gui: pattern,
+				});
+
+				let new_clip = Clip::Midi(MidiClip {
+					pattern: id,
+					..midi
+				});
+				self.add_ref(new_clip);
+				self.replace_clip(track, clip, new_clip);
+			}
+		}
+
+		true
+	}
+
 	fn insert_clip(&mut self, track: usize, clip: impl Into<Clip>, index: usize) -> usize {
 		let clip = clip.into();
 		self.add_ref(clip);
