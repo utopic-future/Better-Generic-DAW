@@ -74,6 +74,8 @@ pub enum ContextTarget {
 pub enum ClipAction {
 	/// Make a copy of the clip.
 	Duplicate,
+	/// Give the clip its own audio sample or MIDI pattern.
+	MakeUnique,
 	/// Remove the clip.
 	Delete,
 	/// Play the clip backwards.
