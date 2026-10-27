@@ -154,6 +154,18 @@ pub enum Instruction {
 	PluginParamChanged(PluginId, ClapId, f32),
 }
 
+#[derive(Clone, Copy, Debug)]
+enum KeyboardEvent {
+	Pressed {
+		physical_key: keyboard::key::Physical,
+		chord: Option<Chord>,
+		repeat: bool,
+	},
+	Released {
+		physical_key: keyboard::key::Physical,
+	},
+}
+
 #[derive(Clone, Debug)]
 pub enum Message {
 	Arrangement(Project, arrangement_view::Message),
@@ -164,7 +176,7 @@ pub enum Message {
 	PluginPicker(plugin_picker::Message),
 	ConfigView(config_view::Message),
 
-	Keyboard(keyboard::Event),
+	Keyboard(KeyboardEvent),
 	MainWindowFocus(bool),
 	CloseRequested(window::Id),
 	ProjectLoaded(
@@ -2252,8 +2264,20 @@ impl Daw {
 				Subscription::none()
 			},
 			keyboard::listen().filter_map(|event| match event {
-				event @ (keyboard::Event::KeyPressed { .. }
-				| keyboard::Event::KeyReleased { .. }) => Some(Message::Keyboard(event)),
+				keyboard::Event::KeyPressed {
+					key,
+					physical_key,
+					modifiers,
+					repeat,
+					..
+				} => Some(Message::Keyboard(KeyboardEvent::Pressed {
+					physical_key,
+					chord: Chord::from_event(&key, physical_key, modifiers),
+					repeat,
+				})),
+				keyboard::Event::KeyReleased { physical_key, .. } => {
+					Some(Message::Keyboard(KeyboardEvent::Released { physical_key }))
+				}
 				_ => None,
 			}),
 			// Reset mesh budget at the start of each frame
@@ -2364,14 +2388,12 @@ impl Daw {
 		Self::keybinds(action)
 	}
 
-	fn handle_keyboard_event(&mut self, event: keyboard::Event) -> Task<Message> {
+	fn handle_keyboard_event(&mut self, event: KeyboardEvent) -> Task<Message> {
 		match event {
-			keyboard::Event::KeyPressed {
-				key,
+			KeyboardEvent::Pressed {
 				physical_key,
-				modifiers,
+				chord,
 				repeat,
-				..
 			} => {
 				if physical_key == keyboard::key::Physical::Code(keyboard::key::Code::CapsLock) {
 					if !repeat && self.main_window_focused {
@@ -2406,13 +2428,11 @@ impl Daw {
 					return Task::none();
 				}
 
-				if self.progress.is_none()
-					&& let Some(chord) = Chord::from_event(&key, physical_key, modifiers)
-				{
+				if self.progress.is_none() && let Some(chord) = chord {
 					return self.update(Message::Shortcut(chord, repeat));
 				}
 			}
-			keyboard::Event::KeyReleased { physical_key, .. } => {
+			KeyboardEvent::Released { physical_key } => {
 				if let Some((track, key)) = self.keyboard_midi_notes.remove(&physical_key) {
 					self.arrangement_view.midi_keyboard_note_off(track, key);
 				}
