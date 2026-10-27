@@ -248,6 +248,7 @@ pub enum Message {
 	FileHoveredLeft,
 
 	TogglePlayback,
+	ToggleKeyboardMidi,
 	Stop,
 	Undo,
 	Redo,
@@ -621,6 +622,12 @@ impl Daw {
 				}
 			}
 			Message::Keyboard(event) => return self.handle_keyboard_event(event),
+			Message::ToggleKeyboardMidi => {
+				self.keyboard_midi_active = !self.keyboard_midi_active;
+				if !self.keyboard_midi_active {
+					self.release_keyboard_midi_notes();
+				}
+			}
 			Message::MainWindowFocus(focused) => {
 				self.main_window_focused = focused;
 				if !focused {
@@ -1685,6 +1692,29 @@ impl Daw {
 						.padding(0)
 						.on_press_with(|| unreachable!()),
 					],
+					button(
+						row![
+							keyboard_music(),
+							text(if self.keyboard_midi_active {
+								"MIDI Keys: On"
+							} else {
+								"MIDI Keys: Off (Caps Lock)"
+							})
+							.size(13)
+							.wrapping(text::Wrapping::None),
+						]
+						.spacing(5)
+					)
+					.style(button_with_radius(
+						if self.keyboard_midi_active {
+							button::primary
+						} else {
+							button::secondary
+						},
+						5
+					))
+					.padding(padding::horizontal(8).vertical(5))
+					.on_press(Message::ToggleKeyboardMidi),
 					row![
 						mouse_area(
 							container(
@@ -2402,10 +2432,7 @@ impl Daw {
 			} => {
 				if physical_key == keyboard::key::Physical::Code(keyboard::key::Code::CapsLock) {
 					if !repeat && self.main_window_focused {
-						self.keyboard_midi_active = !self.keyboard_midi_active;
-						if !self.keyboard_midi_active {
-							self.release_keyboard_midi_notes();
-						}
+						return self.update(Message::ToggleKeyboardMidi);
 					}
 					return Task::none();
 				}
