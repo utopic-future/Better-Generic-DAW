@@ -421,6 +421,7 @@ impl Daw {
 		let (main_window_id, window) = window::open(window::Settings {
 			exit_on_close_request: false,
 			maximized: true,
+			icon: Some(crate::app_icon::window_icon()),
 			..window::Settings::default()
 		});
 		let window = window.discard();
