@@ -248,6 +248,37 @@ impl ArrangementView {
 					.spacing(5)
 					.on_drag(|node| Message::PluginMove(self.selected, node))
 					.style(sweeten_column_with_radius(sweeten_column_style, 5)),
+					container(
+						column![
+							row![
+								text("Routing").size(14),
+								space().width(Fill),
+								text(format!("{} outputs", node.outgoing.len())).size(12),
+							]
+							.align_y(Center),
+							if node.outgoing.is_empty() {
+								text("No outputs connected").size(12).into()
+							} else {
+								sweeten::column(node.outgoing.iter().map(|(target, mix)| {
+									let target = self.arrangement.node(*target);
+									row![
+										text(&*target.name).width(Fill),
+										text(format_mix(*mix)).size(12),
+										icon_button(x(), button::secondary)
+										.on_press(Message::Disconnect(node.id, target.id)),
+									]
+									.align_y(Center)
+									.spacing(5)
+									.into()
+								}))
+								.spacing(3)
+								.into()
+							}
+						]
+						.spacing(5)
+					)
+					.padding(8)
+					.style(container_with_radius(weaker_bordered_box, 5)),
 				]
 				.width(Fill)
 				.align_x(Center)
