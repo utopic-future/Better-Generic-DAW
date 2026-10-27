@@ -2026,7 +2026,7 @@ impl ArrangementView {
 	pub fn view<'a>(&'a self, tab: Tab, state: &'a State) -> Element<'a, Message> {
 		match tab {
 			Tab::Playlist => self.view_playlist(state),
-			Tab::Mixer => mixer::view_mixer(self, state),
+			Tab::Mixer => self.view_mixer(state),
 			Tab::PianoRoll => self.view_piano_roll(state),
 		}
 	}
