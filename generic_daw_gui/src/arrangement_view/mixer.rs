@@ -63,6 +63,26 @@ impl ArrangementView {
 			.width(Fill.min(MIN_SPLIT_WIDTH)),
 			scrollable(
 				column![
+					container(
+						row![
+							column![
+								text(&*node.name)
+									.size(16)
+									.font(Font::DEFAULT.weight(Weight::Bold)),
+								text(format!("{} effects", node.plugins.len())).size(12),
+							]
+							.spacing(2),
+							space().width(Fill),
+							button(row![plus().size(TEXT_HEIGHT), text("Add effect")].align_y(Center).spacing(5))
+								.padding(8)
+								.style(button_with_radius(button::primary, 5))
+								.on_press(Message::PluginPicker),
+						]
+						.align_y(Center)
+						.spacing(8)
+					)
+					.padding(8)
+					.style(container_with_radius(weak_bordered_box, 5)),
 					sweeten::column(node.plugins.iter().enumerate().map(|(i, plugin)| {
 						let button_style = |cond: bool| {
 							if !plugin.active || !enabled {
@@ -220,10 +240,6 @@ impl ArrangementView {
 					.spacing(5)
 					.on_drag(|node| Message::PluginMove(self.selected, node))
 					.style(sweeten_column_with_radius(sweeten_column_style, 5)),
-					button(plus().size(LINE_HEIGHT + 6.0))
-						.padding(5)
-						.style(button_with_radius(button::primary, f32::INFINITY))
-						.on_press(Message::PluginPicker)
 				]
 				.width(Fill)
 				.align_x(Center)
