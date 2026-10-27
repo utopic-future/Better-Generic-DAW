@@ -2284,19 +2284,21 @@ impl Daw {
 			}),
 			// Reset mesh budget at the start of each frame
 			window::frames().map(|_| Message::GenerateMeshes),
-			window::events().filter_map(move |(window, event)| match event {
-				window::Event::Focused if window == main_window_id => {
-					Some(Message::MainWindowFocus(true))
-				}
-				window::Event::Unfocused if window == main_window_id => {
-					Some(Message::MainWindowFocus(false))
-				}
-				window::Event::CloseRequested => Some(Message::CloseRequested(window)),
-				window::Event::FileHovered(..) => Some(Message::FileHovered),
-				window::Event::FileDropped(file) => Some(Message::FileDropped(file.into())),
-				window::Event::FilesHoveredLeft => Some(Message::FileHoveredLeft),
-				_ => None,
-			}),
+			window::events()
+				.with(main_window_id)
+				.filter_map(|(main_window_id, (window, event))| match event {
+					window::Event::Focused if window == main_window_id => {
+						Some(Message::MainWindowFocus(true))
+					}
+					window::Event::Unfocused if window == main_window_id => {
+						Some(Message::MainWindowFocus(false))
+					}
+					window::Event::CloseRequested => Some(Message::CloseRequested(window)),
+					window::Event::FileHovered(..) => Some(Message::FileHovered),
+					window::Event::FileDropped(file) => Some(Message::FileDropped(file.into())),
+					window::Event::FilesHoveredLeft => Some(Message::FileHoveredLeft),
+					_ => None,
+				}),
 		])
 	}
 
@@ -2438,7 +2440,6 @@ impl Daw {
 					self.arrangement_view.midi_keyboard_note_off(track, key);
 				}
 			}
-			_ => {}
 		}
 
 		Task::none()
