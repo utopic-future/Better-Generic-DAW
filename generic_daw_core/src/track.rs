@@ -583,6 +583,7 @@ impl Track {
 					},
 				};
 			}
+			NodeAction::MidiPreview(preview) => {
 				let Some(preview) = preview else {
 					self.preview.stop();
 					return;
@@ -630,6 +631,7 @@ impl Track {
 			midi_producer: None,
 			channel,
 			preview: Preview::default(),
+			keyboard_notes: [KeyboardVoice::Off; 128],
 		}
 	}
 
