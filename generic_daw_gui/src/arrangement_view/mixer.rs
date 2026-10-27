@@ -1,4 +1,5 @@
 use super::*;
+use iced::widget::column;
 
 impl ArrangementView {
 	pub(super) fn view_mixer<'a>(&'a self, state: &'a State) -> Element<'a, Message> {
