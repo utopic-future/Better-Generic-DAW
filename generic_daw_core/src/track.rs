@@ -21,6 +21,42 @@ use std::sync::atomic::Ordering;
 /// by live MIDI input, so that it never collides with them.
 const PREVIEW_NOTE_ID: u32 = i32::MAX as u32;
 
+/// Keyboard notes use the unused portion of the live-note ID range.
+const KEYBOARD_NOTE_ID_BASE: u32 = (i32::MAX - 32751) as u32;
+
+#[derive(Clone, Copy, Debug, Default)]
+enum KeyboardVoice {
+	#[default]
+	Off,
+	PendingOn(u7),
+	On(u7),
+	PendingOff(u7),
+	Retrigger { old_velocity: u7, new_velocity: u7 },
+}
+
+impl KeyboardVoice {
+	fn take_events(&mut self) -> (Option<u7>, Option<u7>) {
+		match *self {
+			Self::PendingOn(velocity) => {
+				*self = Self::On(velocity);
+				(None, Some(velocity))
+			}
+			Self::PendingOff(velocity) => {
+				*self = Self::Off;
+				(Some(velocity), None)
+			}
+			Self::Retrigger {
+				old_velocity,
+				new_velocity,
+			} => {
+				*self = Self::On(new_velocity);
+				(Some(old_velocity), Some(new_velocity))
+			}
+			Self::Off | Self::On(_) => (None, None),
+		}
+	}
+}
+
 /// A note that is being previewed through the track's instrument chain.
 #[derive(Clone, Copy, Debug)]
 struct PreviewVoice {
@@ -134,6 +170,8 @@ pub struct Track {
 	channel: Channel,
 	/// The note that is being previewed right now, if any.
 	preview: Preview,
+	/// Notes held by the computer MIDI keyboard, indexed by MIDI pitch.
+	keyboard_notes: [KeyboardVoice; 128],
 }
 
 impl Track {
@@ -148,6 +186,7 @@ impl Track {
 			midi_producer: None,
 			channel: Channel::new(output),
 			preview: Preview::default(),
+			keyboard_notes: [KeyboardVoice::Off; 128],
 		}
 	}
 
@@ -223,6 +262,8 @@ impl Track {
 				}
 			}
 
+			self.process_keyboard_notes(state, events);
+
 			if self.input.fits_in(state.transport.input_channels) {
 				let audio = if self.input.enable_audio {
 					&mut *audio
@@ -263,6 +304,60 @@ impl Track {
 
 		self.channel
 			.process(state, audio, events, scratch, injector)
+	}
+
+	fn process_keyboard_notes(&mut self, state: &State, events: &mut Vec<Event>) {
+		let position = state.transport.position.to_beat_time(&state.transport);
+
+		for (key, voice) in self.keyboard_notes.iter_mut().enumerate() {
+			let (off, on) = voice.take_events();
+			let key = key as u8;
+			let note_id = Match::Specific(KEYBOARD_NOTE_ID_BASE + u32::from(key));
+
+			if let Some(velocity) = off {
+				events.push(Event::Off {
+					time: 0,
+					key,
+					velocity: f32::from(velocity.as_int()) / 127.0,
+					note_id,
+					flags: EventFlags::IS_LIVE,
+				});
+
+				if state.transport.playing
+					&& let Some(producer) = &mut self.midi_producer
+					&& producer
+						.push(TimedMidiAction {
+							ts: position,
+							action: MidiAction::NoteOff(u4::new(0), u7::new(key), u7::new(0)),
+						})
+					.is_err()
+				{
+					warn!("full ring buffer");
+				}
+			}
+
+			if let Some(velocity) = on {
+				events.push(Event::On {
+					time: 0,
+					key,
+					velocity: f32::from(velocity.as_int()) / 127.0,
+					note_id,
+					flags: EventFlags::IS_LIVE,
+				});
+
+				if state.transport.playing
+					&& let Some(producer) = &mut self.midi_producer
+					&& producer
+						.push(TimedMidiAction {
+							ts: position,
+							action: MidiAction::NoteOn(u4::new(0), u7::new(key), velocity),
+						})
+					.is_err()
+				{
+					warn!("full ring buffer");
+				}
+			}
+		}
 	}
 
 	#[must_use]
@@ -465,7 +560,215 @@ impl Track {
 					updates.push(Update::MidiRecordingInterrupted(self.channel.id()));
 				}
 			}
-			NodeAction::MidiPreview(preview) => {
+			NodeAction::MidiKeyboard(action) => {
+				let key = action.key().as_int() as usize;
+				let current = self.keyboard_notes[key];
+
+				self.keyboard_notes[key] = match action {
+					MidiAction::NoteOn(_, _, velocity) if velocity.as_int() != 0 => match current {
+						KeyboardVoice::Off => KeyboardVoice::PendingOn(velocity),
+						KeyboardVoice::PendingOff(old_velocity) => KeyboardVoice::Retrigger {
+							old_velocity,
+							new_velocity: velocity,
+						},
+						voice => voice,
+					},
+					MidiAction::NoteOn(_, _, _) | MidiAction::NoteOff(_, _, _) => match current {
+						KeyboardVoice::PendingOn(_) => KeyboardVoice::Off,
+						KeyboardVoice::On(velocity) => KeyboardVoice::PendingOff(velocity),
+						KeyboardVoice::Retrigger { old_velocity, .. } => {
+							KeyboardVoice::PendingOff(old_velocity)
+						}
+						voice => voice,
+					},
+				};
+			}
+				let Some(preview) = preview else {
+					self.preview.stop();
+					return;
+				};
+
+				let remaining = preview.duration().to_frames(&state.transport) as u32;
+
+				self.preview.start(preview, remaining);
+			}
+			action => self.channel.apply(action),
+		}
+	}
+
+	pub fn collect_updates(&mut self, updates: &mut Vec<Update>) {
+		if let Some(version) = self.preview.take_ended() {
+			updates.push(Update::MidiPreviewEnded(version));
+		}
+
+		let polyphony = self.voice_alloc.current_polyphony();
+		if polyphony != self.last_polyphony {
+			self.last_polyphony = polyphony;
+			updates.push(Update::Polyphony(self.id(), polyphony));
+		}
+
+		self.channel.collect_updates(updates);
+	}
+
+	#[must_use]
+	pub fn output(&self) -> Channels {
+		self.channel.output()
+	}
+
+	pub fn restart_all_plugins(&mut self) {
+		self.channel.restart_all_plugins();
+	}
+
+	#[must_use]
+	pub fn from_channel(input: Channels, channel: Channel) -> Self {
+		Self {
+			clips: HashMap::new(),
+			voice_alloc: VoiceAlloc::default(),
+			last_polyphony: 0,
+			input,
+			audio_producer: None,
+			midi_producer: None,
+			channel,
+			preview: Preview::default(),
+		}
+	}
+
+	#[must_use]
+	pub fn into_channel(track: Self) -> Channel {
+		track.channel
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::MidiKey;
+
+	fn note(key: u8) -> MidiPreview {
+		MidiPreview::new(MidiKey(key), 0.8, SecondsTime::new(1, 0))
+	}
+
+	#[test]
+	fn a_preview_is_turned_on_and_off_again() {
+		let mut preview = Preview::default();
+		let mut events = Vec::new();
+
+		preview.start(note(60), 100);
+
+		// the note is turned on in the first block
+		preview.process(50, &mut events);
+		assert!(matches!(
+			events[0],
+			Event::On {
+				time: 0,
+				key: 60,
+				velocity: 0.8,
+				note_id: Match::Specific(PREVIEW_NOTE_ID),
+				..
+			}
+		));
+		assert_eq!(events.len(), 1);
+
+		// and it keeps sounding until its duration has passed
+		events.clear();
+		preview.process(50, &mut events);
+		assert!(events.is_empty());
+
+		events.clear();
+		preview.process(50, &mut events);
+		assert!(matches!(
+			events[0],
+			Event::Off {
+				time: 0,
+				key: 60,
+				note_id: Match::Specific(PREVIEW_NOTE_ID),
+				..
+			}
+		));
+		assert_eq!(events.len(), 1);
+	}
+
+	#[test]
+	fn a_preview_is_turned_off_when_it_is_replaced() {
+		let mut preview = Preview::default();
+		let mut events = Vec::new();
+
+		preview.start(note(60), 100);
+		preview.process(50, &mut events);
+		events.clear();
+
+		preview.start(note(64), 100);
+		preview.process(50, &mut events);
+
+		// the note that was sounding is turned off before the new one is turned on
+		assert_eq!(events.len(), 2);
+		assert!(matches!(
+			events[0],
+			Event::Off {
+				key: 60,
+				note_id: Match::Specific(PREVIEW_NOTE_ID),
+				..
+			}
+		));
+		assert!(matches!(
+			events[1],
+			Event::On {
+				key: 64,
+				note_id: Match::Specific(PREVIEW_NOTE_ID),
+				..
+			}
+		));
+	}
+
+	#[test]
+	fn a_preview_that_is_stopped_is_turned_off() {
+		let mut preview = Preview::default();
+		let mut events = Vec::new();
+
+		preview.start(note(60), 100);
+		preview.process(50, &mut events);
+		events.clear();
+
+		preview.stop();
+		preview.process(50, &mut events);
+
+		assert_eq!(events.len(), 1);
+		assert!(matches!(
+			events[0],
+			Event::Off {
+				key: 60,
+				note_id: Match::Specific(PREVIEW_NOTE_ID),
+				..
+			}
+		));
+
+		// and nothing is left hanging afterwards
+		events.clear();
+		preview.process(50, &mut events);
+		assert!(events.is_empty());
+	}
+
+	#[test]
+	fn the_end_of_a_preview_is_reported() {
+		let mut preview = Preview::default();
+		let mut events = Vec::new();
+
+		let preview_note = note(60);
+		preview.start(preview_note, 10);
+
+		assert_eq!(preview.take_ended(), None);
+
+		// the note is turned on in the first block, and turned off in the second one, because that
+		// is where its duration ends
+		preview.process(10, &mut events);
+		assert_eq!(preview.take_ended(), None);
+
+		preview.process(10, &mut events);
+		assert_eq!(preview.take_ended(), Some(preview_note.version()));
+		// and it is only reported once
+		assert_eq!(preview.take_ended(), None);
+	}
+}
 				let Some(preview) = preview else {
 					self.preview.stop();
 					return;
