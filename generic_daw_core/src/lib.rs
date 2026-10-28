@@ -34,7 +34,8 @@ pub use dsp::{PanMode, Utility};
 pub use event::Event;
 pub use midi_clip::MidiClip;
 pub use midi_note::{
-	Key, MidiExpressionPoint, MidiKey, MidiNote, MidiNoteExpression, MidiNoteId,
+	Key, MidiExpressionKind, MidiExpressionPoint, MidiKey, MidiNote, MidiNoteExpression,
+	MidiNoteId,
 };
 pub use midi_pattern::{MidiPattern, MidiPatternId};
 pub use midly::num::{u4, u7};
