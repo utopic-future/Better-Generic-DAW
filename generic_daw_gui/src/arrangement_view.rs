@@ -1783,6 +1783,7 @@ impl ArrangementView {
 			position,
 			scale,
 			mpe_mode,
+			expression_kind,
 			..
 		} = self.piano_roll.get_mut();
 
@@ -2017,6 +2018,27 @@ impl ArrangementView {
 						clip.pattern,
 						note,
 						removed,
+					);
+				}
+			}
+			piano_roll::Action::SelectExpression(kind) => *expression_kind = kind,
+			piano_roll::Action::SetExpressionPoint(note, kind, position, value) => {
+				if let Some(before) = self.arrangement.set_expression_point(
+					clip.pattern,
+					note,
+					kind,
+					position,
+					Some(value),
+				) {
+					history::record_expression_point_change(
+						&mut self.arrangement,
+						&mut self.history,
+						clip.pattern,
+						note,
+						kind,
+						position,
+						before,
+						Some(value),
 					);
 				}
 			}
@@ -2616,7 +2638,54 @@ impl ArrangementView {
 			return center("No MIDI clip selected.").into();
 		};
 
+		let pattern = &self.arrangement.midi_patterns()[&clip.pattern];
 		let mpe_mode = self.piano_roll.borrow().mpe_mode;
+		let expression_kind = self.piano_roll.borrow().expression_kind;
+		let curve_controls: Element<'_, Message> = if mpe_mode {
+			row![
+				button("Pitch bend")
+					.style(button_with_radius(
+						if expression_kind == generic_daw_core::MidiExpressionKind::PitchBend {
+							button::primary
+						} else {
+							button::secondary
+						},
+						5,
+					))
+					.on_press(Message::PianoRollAction(piano_roll::Action::SelectExpression(
+						generic_daw_core::MidiExpressionKind::PitchBend,
+					))),
+				button("Pressure")
+					.style(button_with_radius(
+						if expression_kind == generic_daw_core::MidiExpressionKind::Pressure {
+							button::primary
+						} else {
+							button::secondary
+						},
+						5,
+					))
+					.on_press(Message::PianoRollAction(piano_roll::Action::SelectExpression(
+						generic_daw_core::MidiExpressionKind::Pressure,
+					))),
+				button("Timbre")
+					.style(button_with_radius(
+						if expression_kind == generic_daw_core::MidiExpressionKind::Timbre {
+							button::primary
+						} else {
+							button::secondary
+						},
+						5,
+					))
+					.on_press(Message::PianoRollAction(piano_roll::Action::SelectExpression(
+						generic_daw_core::MidiExpressionKind::Timbre,
+					))),
+			]
+			.spacing(5)
+			.padding(5)
+			.into()
+		} else {
+			space().height(0).into()
+		};
 
 		column![
 			row![
@@ -2632,6 +2701,7 @@ impl ArrangementView {
 			.spacing(8)
 			.align_y(Center)
 			.padding(5),
+			curve_controls,
 		Seeker::new(
 			self.arrangement.transport(),
 			&state.grid,
@@ -2658,9 +2728,7 @@ impl ArrangementView {
 					&self.piano_roll,
 					self.arrangement.transport(),
 					&state.grid,
-					self.arrangement.midi_patterns()[&clip.pattern]
-						.notes
-						.iter()
+					pattern.notes.iter()
 						.enumerate()
 						.map(|(index, note)| {
 							Note::new(
@@ -2672,6 +2740,7 @@ impl ArrangementView {
 								Message::PianoRollAction,
 							)
 						}),
+					&pattern.expression,
 					Message::PianoRollAction,
 				),
 				move || Self::piano_roll_context_menu(state),
