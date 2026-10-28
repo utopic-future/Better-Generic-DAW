@@ -90,10 +90,39 @@ pub struct MidiExpressionPoint {
 	pub value: f32,
 }
 
+/// The MPE expression dimension represented by a curve.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MidiExpressionKind {
+	#[default]
+	PitchBend,
+	Pressure,
+	Timbre,
+}
+
 /// Per-note MPE expression curves.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MidiNoteExpression {
 	pub pitch_bend: Vec<MidiExpressionPoint>,
 	pub pressure: Vec<MidiExpressionPoint>,
 	pub timbre: Vec<MidiExpressionPoint>,
+}
+
+
+impl MidiNoteExpression {
+	#[must_use]
+	pub fn curve(&self, kind: MidiExpressionKind) -> &[MidiExpressionPoint] {
+		match kind {
+			MidiExpressionKind::PitchBend => &self.pitch_bend,
+			MidiExpressionKind::Pressure => &self.pressure,
+			MidiExpressionKind::Timbre => &self.timbre,
+		}
+	}
+
+	pub fn curve_mut(&mut self, kind: MidiExpressionKind) -> &mut Vec<MidiExpressionPoint> {
+		match kind {
+			MidiExpressionKind::PitchBend => &mut self.pitch_bend,
+			MidiExpressionKind::Pressure => &mut self.pressure,
+			MidiExpressionKind::Timbre => &mut self.timbre,
+		}
+	}
 }
