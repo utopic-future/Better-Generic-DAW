@@ -10,7 +10,8 @@ use crate::{
 	vst3_host::Vst3Host,
 };
 use generic_daw_core::{
-	AudioClip, Channels, Clip, ClipId, MidiClip, MidiKey, MidiNote, MidiNoteId, NodeId, PanMode,
+	AudioClip, Channels, Clip, ClipId, MidiClip, MidiExpressionPoint, MidiKey, MidiNote,
+	MidiNoteExpression, MidiNoteId, NodeId, PanMode,
 	Point, Transition,
 	clap_host::StateContextType,
 	time::{BeatRange, BeatSpan, BeatTime, OffsetBeatRange, OffsetBeatSpan, SecondsTime},
@@ -68,7 +69,14 @@ impl Arrangement {
 		for pattern in self.midi_patterns().values() {
 			midi_patterns.insert(
 				pattern.id,
-				writer.push_midi_pattern(
+				{
+				let note_indices = pattern
+					.notes
+					.iter()
+					.enumerate()
+					.map(|(index, note)| (note.id, index as u32))
+					.collect::<HashMap<_, _>>();
+				writer.push_midi_pattern_with_expression(
 					&pattern.name,
 					pattern.notes.iter().map(|note| proto::Note {
 						key: note.key.0.into(),
@@ -78,7 +86,31 @@ impl Arrangement {
 							end: note.position.end().to_bits(),
 						},
 					}),
-				),
+					pattern.expression.iter().filter_map(|(id, expression)| {
+						Some(proto::NoteExpression {
+							note_index: *note_indices.get(id)?,
+							pitch_bend: expression.pitch_bend.iter().map(|point| {
+								proto::ExpressionPoint {
+									position: point.position.to_bits(),
+									value: point.value,
+								}
+							}).collect(),
+							pressure: expression.pressure.iter().map(|point| {
+								proto::ExpressionPoint {
+									position: point.position.to_bits(),
+									value: point.value,
+								}
+							}).collect(),
+							timbre: expression.timbre.iter().map(|point| {
+								proto::ExpressionPoint {
+									position: point.position.to_bits(),
+									value: point.value,
+								}
+							}).collect(),
+						})
+					}),
+				)
+			},
 			);
 		}
 
@@ -435,9 +467,48 @@ impl Arrangement {
 						BeatTime::from_bits(note.position.end),
 					),
 				})
+				.collect::<Vec<_>>();
+			let expression = pattern
+				.expressions
+				.iter()
+				.filter_map(|expression| {
+					let note_id = notes.get(expression.note_index as usize)?.id;
+					Some((
+						note_id,
+						MidiNoteExpression {
+							pitch_bend: expression
+								.pitch_bend
+								.iter()
+								.map(|point| MidiExpressionPoint {
+									position: BeatTime::from_bits(point.position),
+									value: point.value,
+								})
+								.collect(),
+							pressure: expression
+								.pressure
+								.iter()
+								.map(|point| MidiExpressionPoint {
+									position: BeatTime::from_bits(point.position),
+									value: point.value,
+								})
+								.collect(),
+							timbre: expression
+								.timbre
+								.iter()
+								.map(|point| MidiExpressionPoint {
+									position: BeatTime::from_bits(point.position),
+									value: point.value,
+								})
+								.collect(),
+						},
+					))
+				})
 				.collect();
-
-			let pattern = MidiPatternPair::from_notes(notes, &pattern.name);
+			let pattern = MidiPatternPair::from_notes_with_expression(
+				notes,
+				expression,
+				&pattern.name,
+			);
 			let id = pattern.gui.id;
 			arrangement.add_midi_pattern(pattern);
 			midi_patterns.insert(index, id);
