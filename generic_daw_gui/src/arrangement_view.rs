@@ -1782,6 +1782,7 @@ impl ArrangementView {
 			secondary,
 			position,
 			scale,
+			mpe_mode,
 			..
 		} = self.piano_roll.get_mut();
 
@@ -2019,6 +2020,7 @@ impl ArrangementView {
 					);
 				}
 			}
+			piano_roll::Action::ToggleMpeMode => *mpe_mode = !*mpe_mode,
 			piano_roll::Action::Finished => {}
 		}
 	}
@@ -2614,6 +2616,22 @@ impl ArrangementView {
 			return center("No MIDI clip selected.").into();
 		};
 
+		let mpe_mode = self.piano_roll.borrow().mpe_mode;
+
+		column![
+			row![
+				button(if mpe_mode { "MPE mode: On" } else { "MPE mode: Off" })
+					.style(button_with_radius(
+						if mpe_mode { button::primary } else { button::secondary },
+						5,
+					))
+					.on_press(Message::PianoRollAction(piano_roll::Action::ToggleMpeMode))
+					.padding(padding::horizontal(10).vertical(5)),
+				text("Per-note expression editing").size(TEXT_HEIGHT),
+			]
+			.spacing(8)
+			.align_y(Center)
+			.padding(5),
 		Seeker::new(
 			self.arrangement.transport(),
 			&state.grid,
@@ -2669,6 +2687,7 @@ impl ArrangementView {
 				))
 			},
 		)
+		]
 		.into()
 	}
 
@@ -2690,6 +2709,9 @@ impl ArrangementView {
 	/// The message of a shortcut that applies to the arrangement.
 	pub fn keybinds(action: ShortcutAction) -> Option<fn(Tab) -> Message> {
 		match action {
+			ShortcutAction::ToggleMpeMode => {
+				Some(|_| Message::PianoRollAction(piano_roll::Action::ToggleMpeMode))
+			}
 			ShortcutAction::Delete => Some(Message::Delete),
 			ShortcutAction::Escape => Some(Message::Escape),
 			ShortcutAction::CursorUp => Some(Message::ArrowUp),
