@@ -2399,10 +2399,15 @@ impl Daw {
 			return PluginPicker::keybinds(action);
 		}
 
-		// the arrangement gets the key before the app does
-		let action = self
-			.shortcuts
-			.lookup(Context::Arrangement, &chord)
+		// Editor shortcuts apply only to the active piano-roll pane.
+		let tab = self
+			.bottom_pane
+			.filter(|_| self.bottom_selected)
+			.unwrap_or(self.top_pane);
+		let action = (tab == Tab::PianoRoll)
+			.then(|| self.shortcuts.lookup(Context::MidiEditor, &chord))
+			.flatten()
+			.or_else(|| self.shortcuts.lookup(Context::Arrangement, &chord))
 			.or_else(|| self.shortcuts.lookup(Context::Global, &chord))?;
 
 		if repeat && !action.repeatable() {
