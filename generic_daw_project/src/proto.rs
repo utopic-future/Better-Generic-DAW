@@ -69,6 +69,28 @@ pub struct MidiPattern {
 	pub notes: Vec<Note>,
 	#[prost(string)]
 	pub name: String,
+	#[prost(message, repeated)]
+	pub expressions: Vec<NoteExpression>,
+}
+
+#[derive(Clone, Message)]
+pub struct NoteExpression {
+	#[prost(uint32)]
+	pub note_index: u32,
+	#[prost(message, repeated)]
+	pub pitch_bend: Vec<ExpressionPoint>,
+	#[prost(message, repeated)]
+	pub pressure: Vec<ExpressionPoint>,
+	#[prost(message, repeated)]
+	pub timbre: Vec<ExpressionPoint>,
+}
+
+#[derive(Clone, Copy, Message)]
+pub struct ExpressionPoint {
+	#[prost(uint64)]
+	pub position: u64,
+	#[prost(float)]
+	pub value: f32,
 }
 
 #[derive(Clone, Copy, Message)]
