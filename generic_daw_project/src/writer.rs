@@ -33,9 +33,20 @@ impl Writer {
 		name: impl AsRef<str>,
 		notes: impl IntoIterator<Item = proto::Note>,
 	) -> proto::MidiPatternIndex {
+		self.push_midi_pattern_with_expression(name, notes, std::iter::empty())
+	}
+
+	#[must_use]
+	pub fn push_midi_pattern_with_expression(
+		&mut self,
+		name: impl AsRef<str>,
+		notes: impl IntoIterator<Item = proto::Note>,
+		expressions: impl IntoIterator<Item = proto::NoteExpression>,
+	) -> proto::MidiPatternIndex {
 		self.0.midi_patterns.push(proto::MidiPattern {
 			name: name.as_ref().to_owned(),
 			notes: notes.into_iter().collect(),
+			expressions: expressions.into_iter().collect(),
 		});
 
 		proto::MidiPatternIndex {
