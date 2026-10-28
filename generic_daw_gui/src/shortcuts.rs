@@ -11,6 +11,8 @@ pub enum Context {
 	Global,
 	/// The arrangement.
 	Arrangement,
+	/// The MIDI editor.
+	MidiEditor,
 	/// The plugin picker.
 	PluginPicker,
 	/// The settings.
@@ -19,9 +21,10 @@ pub enum Context {
 
 impl Context {
 	/// All the contexts, in the order they are shown in.
-	pub const ALL: [Self; 4] = [
+	pub const ALL: [Self; 5] = [
 		Self::Global,
 		Self::Arrangement,
+		Self::MidiEditor,
 		Self::PluginPicker,
 		Self::Settings,
 	];
@@ -32,6 +35,7 @@ impl Context {
 		match self {
 			Self::Global => "Global",
 			Self::Arrangement => "Arrangement",
+			Self::MidiEditor => "MIDI Editor",
 			Self::PluginPicker => "Plugin Picker",
 			Self::Settings => "Settings",
 		}
@@ -131,6 +135,10 @@ pub enum Action {
 	/// Turn the solo of what is selected on or off.
 	ToggleSolo,
 
+	// MIDI editor
+	/// Toggle per-note expression editing in the MIDI editor.
+	ToggleMpeMode,
+
 	// Plugin picker
 	/// Close the plugin picker.
 	ClosePluginPicker,
@@ -148,7 +156,7 @@ pub enum Action {
 
 impl Action {
 	/// All the actions, in the order they are shown in.
-	pub const ALL: [Self; 48] = [
+	pub const ALL: [Self; 49] = [
 		Self::TogglePlayback,
 		Self::Stop,
 		Self::ToggleFullscreen,
@@ -192,6 +200,7 @@ impl Action {
 		Self::Quantize,
 		Self::Reverse,
 		Self::ToggleSolo,
+		Self::ToggleMpeMode,
 		Self::ClosePluginPicker,
 		Self::SelectPlugin,
 		Self::HoverPrevious,
@@ -222,6 +231,7 @@ impl Action {
 			| Self::Quantize
 			| Self::Reverse
 			| Self::ToggleSolo => Context::Arrangement,
+			Self::ToggleMpeMode => Context::MidiEditor,
 			Self::ClosePluginPicker
 			| Self::SelectPlugin
 			| Self::HoverPrevious
@@ -278,6 +288,7 @@ impl Action {
 			Self::Quantize => "Quantize",
 			Self::Reverse => "Reverse",
 			Self::ToggleSolo => "Toggle solo",
+			Self::ToggleMpeMode => "Toggle MPE mode",
 			Self::ClosePluginPicker | Self::CloseSettings => "Close",
 			Self::SelectPlugin => "Add plugin",
 			Self::HoverPrevious => "Previous plugin",
@@ -293,6 +304,7 @@ impl Action {
 			Self::Delete
 				| Self::Escape
 				| Self::MakeUnique
+				| Self::ToggleMpeMode
 				| Self::SelectAll
 				| Self::SelectInverse
 				| Self::ClosePluginPicker
@@ -717,6 +729,10 @@ const DEFAULTS: &[(Action, &[Chord])] = &[
 		&[Chord::commanded(Key::Character('3'))],
 	),
 	(Action::ToggleGrid, &[Chord::commanded(Key::Character('4'))]),
+	(
+		Action::ToggleMpeMode,
+		&[Chord::commanded_shifted(Key::Character('m'))],
+	),
 	(
 		Action::CycleForwards,
 		&[Chord::of(Key::Named(NamedKey::Tab))],
