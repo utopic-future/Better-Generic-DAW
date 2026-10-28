@@ -1331,9 +1331,15 @@ impl Arrangement {
 				let id = MidiPatternId::unique();
 				pattern.id = id;
 				pattern.refs = 0;
+				let mut expression = HashMap::new();
 				for note in &mut pattern.notes {
+					let old_id = note.id;
 					note.id = MidiNoteId::unique();
+					if let Some(curves) = pattern.expression.remove(&old_id) {
+						expression.insert(note.id, curves);
+					}
 				}
+				pattern.expression = expression;
 				let mut core = generic_daw_core::MidiPattern::from_notes(&pattern.notes);
 				core.id = id;
 				self.add_midi_pattern(MidiPatternPair {
@@ -1638,11 +1644,23 @@ impl Arrangement {
 	}
 
 	pub fn duplicate_note(&mut self, pattern: MidiPatternId, note: usize) -> usize {
-		let note = MidiNote {
+		let original = self.midi_patterns[&pattern].notes[note];
+		let duplicate = MidiNote {
 			id: MidiNoteId::unique(),
-			..self.midi_patterns[&pattern].notes[note]
+			..original
 		};
-		self.add_note(pattern, note)
+		if let Some(expression) = self.midi_patterns[&pattern]
+			.expression
+			.get(&original.id)
+			.cloned()
+		{
+			self.midi_patterns
+				.get_mut(&pattern)
+			.unwrap()
+				.expression
+				.insert(duplicate.id, expression);
+		}
+		self.add_note(pattern, duplicate)
 	}
 
 	fn insert_note(&mut self, pattern: MidiPatternId, note: MidiNote, index: usize) -> usize {
