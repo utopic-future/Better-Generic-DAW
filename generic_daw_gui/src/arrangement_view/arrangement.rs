@@ -18,7 +18,8 @@ use crate::{
 };
 use generic_daw_core::{
 	AudioClip, AudioPreview, AudioProcessor, AudioThread, Batch, Channels, Clip, ClipId, Message,
-	MidiAction, MidiClip, MidiKey, MidiNote, MidiNoteId, MidiPatternAction, MidiPatternId, MidiPreview,
+	MidiAction, MidiClip, MidiExpressionKind, MidiExpressionPoint, MidiKey, MidiNote,
+	MidiNoteExpression, MidiNoteId, MidiPatternAction, MidiPatternId, MidiPreview,
 	NodeAction, NodeId, NodeImpl as _, PanMode, Point, PullSlot, PushSlot, SampleId, Streams, u4, u7,
 	ThreadPool, TimedMidiAction, Transport, Update, Version, build_streams,
 	clap_host::{ClapId, HostInfo},
@@ -1701,6 +1702,57 @@ impl Arrangement {
 				self.midi_pattern_action(pattern, MidiPatternAction::Replace(note));
 			}
 		}
+	}
+
+	#[must_use]
+	pub fn expression_point(
+		&self,
+		pattern: MidiPatternId,
+		note: MidiNoteId,
+		kind: MidiExpressionKind,
+		position: BeatTime,
+	) -> Option<f32> {
+		self.midi_patterns
+			.get(&pattern)?
+			.expression
+			.get(&note)?
+			.curve(kind)
+			.iter()
+			.find(|point| point.position == position)
+			.map(|point| point.value)
+	}
+
+	/// Sets or removes a note-relative expression point and returns its previous value.
+	pub fn set_expression_point(
+		&mut self,
+		pattern: MidiPatternId,
+		note: MidiNoteId,
+		kind: MidiExpressionKind,
+		position: BeatTime,
+		value: Option<f32>,
+	) -> Option<Option<f32>> {
+		let pattern = self.midi_patterns.get_mut(&pattern)?;
+		if !pattern.notes.contains_key(&note) {
+			return None;
+		}
+
+		let expression = pattern.expression.entry(note).or_default();
+		let curve = expression.curve_mut(kind);
+		let index = curve.binary_search_by(|point| point.position.cmp(&position));
+		let previous = index.ok().map(|index| curve[index].value);
+
+		match (index, value) {
+			(Ok(index), Some(value)) => curve[index].value = value,
+			(Ok(index), None) => {
+				curve.remove(index);
+			}
+			(Err(index), Some(value)) => {
+				curve.insert(index, MidiExpressionPoint { position, value });
+			}
+			(Err(_), None) => {}
+		}
+
+		Some(previous)
 	}
 
 	pub fn remove_note(&mut self, pattern: MidiPatternId, note: usize) -> Option<MidiNote> {
