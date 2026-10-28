@@ -2,7 +2,10 @@ use crate::{
 	state::Grid,
 	widget::{ALPHA_1_3, Delta, key_to_px, note::Note, px_to_key, px_to_time, time_to_px},
 };
-use generic_daw_core::{MidiKey, Transport, time::BeatTime};
+use generic_daw_core::{
+	MidiExpressionKind, MidiExpressionPoint, MidiKey, MidiNoteExpression, MidiNoteId, Transport,
+	time::BeatTime,
+};
 use iced::{
 	Element, Event, Fill, Length, Point, Rectangle, Renderer, Size, Theme, Vector,
 	advanced::{
@@ -14,8 +17,9 @@ use iced::{
 		widget::{Operation, Tree},
 	},
 	border, keyboard,
+	widget::canvas::{Frame, Path, Stroke},
 };
-use std::{cell::RefCell, collections::HashSet};
+use std::{cell::RefCell, collections::{HashSet, HashMap}};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Action {
@@ -29,6 +33,8 @@ pub enum Action {
 	SplitAt(BeatTime),
 	DragSplit(BeatTime),
 	ToggleMpeMode,
+	SelectExpression(MidiExpressionKind),
+	SetExpressionPoint(MidiNoteId, MidiExpressionKind, BeatTime, f32),
 	DragVelocity(f32),
 	Delete,
 	/// The mouse button was released, so a drag is over.
@@ -43,6 +49,7 @@ pub enum Status {
 	TrimmingEnd(BeatTime),
 	DraggingSplit(BeatTime),
 	DraggingVelocity(usize, f32),
+	EditingExpression(usize, BeatTime, f32),
 	#[default]
 	None,
 }
@@ -51,6 +58,7 @@ pub enum Status {
 pub struct State {
 	pub status: Status,
 	pub mpe_mode: bool,
+	pub expression_kind: MidiExpressionKind,
 	pub primary: HashSet<usize>,
 	pub secondary: HashSet<usize>,
 	pub position: Vector,
@@ -90,6 +98,7 @@ pub struct PianoRoll<'a, Message> {
 	transport: &'a Transport,
 	grid: &'a Grid,
 	notes: Box<[Note<'a, Message>]>,
+	expression: &'a HashMap<MidiNoteId, MidiNoteExpression>,
 	action: fn(Action) -> Message,
 }
 
@@ -125,6 +134,54 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for PianoRoll<'a, Message
 		shell: &mut Shell<'_, Message>,
 		viewport: &Rectangle,
 	) {
+		if let Event::Mouse(mouse::Event::ButtonPressed {
+			button: mouse::Button::Left,
+			..
+		}) = event
+		{
+			let edit = {
+				let state = self.state.borrow();
+				state.mpe_mode
+					.then(|| {
+						self.notes
+							.iter()
+							.zip(layout.children())
+							.enumerate()
+							.find_map(|(index, (note, note_layout))| {
+								if !state.primary.contains(&index) {
+									return None;
+								}
+							let bounds = note_layout.bounds();
+							let cursor = cursor.position_in(bounds)?;
+							let x = (cursor.x / bounds.width.max(1.0)).clamp(0.0, 1.0);
+							let y = (cursor.y / bounds.height.max(1.0)).clamp(0.0, 1.0);
+							let len = note.note.position.len().to_bits();
+							let position = BeatTime::from_bits(
+								(len as f64 * f64::from(x)).round() as u64,
+							);
+							Some((
+								index,
+								note.note.id,
+								state.expression_kind,
+								position,
+								expression_value(state.expression_kind, y),
+							))
+						})
+					})
+					.flatten()
+			};
+			if let Some((index, note, kind, position, value)) = edit {
+				self.state.borrow_mut().status =
+					Status::EditingExpression(index, position, value);
+				shell.publish((self.action)(Action::SetExpressionPoint(
+					note, kind, position, value,
+				)));
+				shell.capture_event();
+				shell.request_redraw();
+				return;
+			}
+		}
+
 		for ((child, tree), note_layout) in self
 			.notes
 			.iter_mut()
@@ -333,6 +390,24 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for PianoRoll<'a, Message
 						shell.capture_event();
 					}
 				}
+				Status::EditingExpression(note, position, old_value) => {
+					let note_bounds = layout.child(note).bounds();
+					let local_y = note_bounds.y - layout.position().y;
+					let ratio = ((cursor.y - local_y) / note_bounds.height.max(1.0))
+						.clamp(0.0, 1.0);
+					let kind = state.expression_kind;
+					let value = expression_value(kind, ratio);
+					if value != old_value {
+						state.status = Status::EditingExpression(note, position, value);
+						shell.publish((self.action)(Action::SetExpressionPoint(
+							self.notes[note].note.id,
+							kind,
+							position,
+							value,
+						)));
+						shell.capture_event();
+					}
+				}
 				Status::DraggingVelocity(note, val) => {
 					if let Some(note_bounds) = layout.child(note).bounds().intersection(viewport) {
 						let border = 10f32.min(note_bounds.width / 3.0);
@@ -444,6 +519,64 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for PianoRoll<'a, Message
 			}
 		}
 
+		let (selected, expression_kind) = {
+			let state = self.state.borrow();
+			(state.primary.iter().copied().collect::<Vec<_>>(), state.expression_kind)
+		};
+		let mut frame = Frame::new(renderer, layout.bounds().size());
+		let expression_color = theme.palette().primary.strong.color;
+		let mut has_expression = false;
+		for index in selected {
+			let Some(note) = self.notes.get(index) else {
+				continue;
+			};
+			let Some(expression) = self.expression.get(&note.note.id) else {
+				continue;
+			};
+			let curve = expression.curve(expression_kind);
+			if curve.is_empty() {
+				continue;
+			}
+			let bounds = layout.child(index).bounds();
+			let local_bounds = Rectangle {
+				x: bounds.x - layout.bounds().x,
+				y: bounds.y - layout.bounds().y,
+				..bounds
+			};
+			let duration = note.note.position.len().to_bits().max(1) as f64;
+			let point = |point: &MidiExpressionPoint| {
+				let x = (point.position.to_bits() as f64 / duration).clamp(0.0, 1.0) as f32;
+				let y = 1.0 - expression_level(expression_kind, point.value);
+				Point::new(
+					local_bounds.x + x * local_bounds.width,
+					local_bounds.y + y * local_bounds.height,
+				)
+			};
+			if curve.len() > 1 {
+				frame.stroke(
+					&Path::new(|path| {
+						path.move_to(point(&curve[0]));
+						for control in &curve[1..] {
+							path.line_to(point(control));
+						}
+					}),
+					Stroke::default().with_color(expression_color).with_width(2.0),
+				);
+			}
+			for control in curve {
+				frame.fill(&Path::circle(point(control), 3.0), expression_color);
+			}
+			has_expression = true;
+		}
+		if has_expression {
+			renderer.with_layer(*viewport, |renderer| {
+				renderer.with_translation(
+					layout.bounds().position() - Point::ORIGIN,
+					|renderer| renderer.draw_geometry(frame.into_geometry()),
+				);
+			});
+		}
+
 		let (status, scale, position) = {
 			let state = self.state.borrow();
 			(state.status, state.scale, state.position)
@@ -501,6 +634,7 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for PianoRoll<'a, Message
 				Interaction::ResizingHorizontally
 			}
 			Status::DraggingVelocity(..) => Interaction::Pointer,
+			Status::EditingExpression(..) => Interaction::ResizingVertically,
 			Status::None => self
 				.notes
 				.iter()
@@ -561,6 +695,7 @@ impl<'a, Message> PianoRoll<'a, Message> {
 		transport: &'a Transport,
 		grid: &'a Grid,
 		notes: impl IntoIterator<Item = Note<'a, Message>>,
+		expression: &'a HashMap<MidiNoteId, MidiNoteExpression>,
 		action: fn(Action) -> Message,
 	) -> Self {
 		Self {
@@ -568,6 +703,7 @@ impl<'a, Message> PianoRoll<'a, Message> {
 			transport,
 			grid,
 			notes: notes.into_iter().collect(),
+			expression,
 			action,
 		}
 	}
@@ -576,5 +712,22 @@ impl<'a, Message> PianoRoll<'a, Message> {
 impl<'a, Message: 'a> From<PianoRoll<'a, Message>> for Element<'a, Message> {
 	fn from(value: PianoRoll<'a, Message>) -> Self {
 		Self::new(value)
+	}
+}
+
+
+fn expression_level(kind: MidiExpressionKind, value: f32) -> f32 {
+	match kind {
+		MidiExpressionKind::PitchBend => (value.clamp(-1.0, 1.0) + 1.0) * 0.5,
+		MidiExpressionKind::Pressure | MidiExpressionKind::Timbre => value.clamp(0.0, 1.0),
+	}
+}
+
+fn expression_value(kind: MidiExpressionKind, vertical_position: f32) -> f32 {
+	match kind {
+		MidiExpressionKind::PitchBend => 1.0 - 2.0 * vertical_position.clamp(0.0, 1.0),
+		MidiExpressionKind::Pressure | MidiExpressionKind::Timbre => {
+			1.0 - vertical_position.clamp(0.0, 1.0)
+		}
 	}
 }
