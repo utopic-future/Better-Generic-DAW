@@ -28,6 +28,7 @@ pub enum Action {
 	TrimEnd(Delta<BeatTime>),
 	SplitAt(BeatTime),
 	DragSplit(BeatTime),
+	ToggleMpeMode,
 	DragVelocity(f32),
 	Delete,
 	/// The mouse button was released, so a drag is over.
@@ -49,6 +50,7 @@ pub enum Status {
 #[derive(Debug, Default)]
 pub struct State {
 	pub status: Status,
+	pub mpe_mode: bool,
 	pub primary: HashSet<usize>,
 	pub secondary: HashSet<usize>,
 	pub position: Vector,
