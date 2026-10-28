@@ -1,5 +1,5 @@
 use crate::{
-	MidiKey, MidiNote, MidiNoteId, MidiPatternAction, Transport,
+	MidiKey, MidiNote, MidiNoteExpression, MidiNoteId, MidiPatternAction, Transport,
 	time::{BeatRange, BeatTime, SecondsTime},
 };
 use midly::{
@@ -15,6 +15,7 @@ unique_id!(MidiPatternId);
 pub struct MidiPattern {
 	pub id: MidiPatternId,
 	pub notes: HashMap<MidiNoteId, MidiNote>,
+	pub expression: HashMap<MidiNoteId, MidiNoteExpression>,
 }
 
 impl MidiPattern {
@@ -23,6 +24,7 @@ impl MidiPattern {
 		Self {
 			id: MidiPatternId::unique(),
 			notes: notes.iter().copied().map(|note| (note.id, note)).collect(),
+			expression: HashMap::new(),
 		}
 	}
 
