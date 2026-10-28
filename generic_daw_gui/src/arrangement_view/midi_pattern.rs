@@ -39,7 +39,8 @@ impl MidiPatternPair {
 		expression: HashMap<MidiNoteId, MidiNoteExpression>,
 		name: &str,
 	) -> Self {
-		let core = generic_daw_core::MidiPattern::from_notes(&notes);
+		let mut core = generic_daw_core::MidiPattern::from_notes(&notes);
+		core.expression = expression.clone();
 		let gui = MidiPattern {
 			id: core.id,
 			name: name.into(),
