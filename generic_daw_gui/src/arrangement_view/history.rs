@@ -1,7 +1,7 @@
 //! Undo and redo for edits to clips and notes.
 
 use super::arrangement::Arrangement;
-use generic_daw_core::{Clip, MidiNote, MidiNoteId, MidiPatternId, NodeId};
+use generic_daw_core::{Clip, MidiExpressionKind, MidiNote, MidiNoteId, MidiPatternId, NodeId};
 
 /// How many steps back the user can go.
 const MAX_STEPS: usize = 128;
@@ -77,6 +77,15 @@ pub enum Edit {
 		before: MidiNote,
 		after: MidiNote,
 	},
+	/// A note-relative expression point that changed.
+	ExpressionPointModify {
+		pattern: MidiPatternId,
+		note: MidiNoteId,
+		kind: MidiExpressionKind,
+		position: generic_daw_core::time::BeatTime,
+		before: Option<f32>,
+		after: Option<f32>,
+	},
 }
 
 impl Edit {
@@ -99,6 +108,31 @@ impl Edit {
 					after: new_after, ..
 				},
 			) if after.id == new_after.id => {
+				*after = *new_after;
+				true
+			}
+			(
+				Self::ExpressionPointModify {
+					pattern,
+					note,
+					kind,
+					position,
+					after,
+					..
+				},
+				Self::ExpressionPointModify {
+					pattern: new_pattern,
+					note: new_note,
+					kind: new_kind,
+					position: new_position,
+					after: new_after,
+					..
+				},
+			) if pattern == new_pattern
+				&& note == new_note
+				&& kind == new_kind
+				&& position == new_position =>
+			{
 				*after = *new_after;
 				true
 			}
@@ -226,6 +260,30 @@ impl Edit {
 
 				Self::NoteModify {
 					pattern,
+					before,
+					after,
+				}
+			}
+			Self::ExpressionPointModify {
+				pattern,
+				note,
+				kind,
+				position,
+				before,
+				after,
+			} => {
+				arrangement.set_expression_point(
+					pattern,
+					note,
+					kind,
+					position,
+					if redo { after } else { before },
+				);
+				Self::ExpressionPointModify {
+					pattern,
+					note,
+					kind,
+					position,
 					before,
 					after,
 				}
@@ -691,5 +749,32 @@ mod tests {
 
 		assert!(history.redo(&mut arrangement));
 		assert_eq!(arrangement.midi_patterns()[&pattern].notes, vec![notes[2]]);
+	}
+}
+
+
+/// Records a change to one note-relative expression point.
+pub fn record_expression_point_change(
+	arrangement: &mut Arrangement,
+	history: &mut History,
+	pattern: MidiPatternId,
+	note: MidiNoteId,
+	kind: MidiExpressionKind,
+	position: generic_daw_core::time::BeatTime,
+	before: Option<f32>,
+	after: Option<f32>,
+) {
+	if before != after {
+		history.push(
+			arrangement,
+			Edit::ExpressionPointModify {
+				pattern,
+				note,
+				kind,
+				position,
+				before,
+				after,
+			},
+		);
 	}
 }
