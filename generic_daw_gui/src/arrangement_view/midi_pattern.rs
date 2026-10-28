@@ -1,6 +1,5 @@
 use generic_daw_core::{
-	MidiExpressionPoint, MidiNote, MidiNoteExpression, MidiNoteId, MidiPatternId, Transport,
-	time::BeatTime,
+	MidiNote, MidiNoteExpression, MidiNoteId, MidiPatternId, Transport, time::BeatTime,
 };
 use std::{collections::HashMap, path::Path, sync::Arc};
 
