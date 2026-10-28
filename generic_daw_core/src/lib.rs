@@ -33,7 +33,9 @@ pub use cpal::{DeviceDescription, DeviceId, HostId};
 pub use dsp::{PanMode, Utility};
 pub use event::Event;
 pub use midi_clip::MidiClip;
-pub use midi_note::{Key, MidiKey, MidiNote, MidiNoteId};
+pub use midi_note::{
+	Key, MidiExpressionPoint, MidiKey, MidiNote, MidiNoteExpression, MidiNoteId,
+};
 pub use midi_pattern::{MidiPattern, MidiPatternId};
 pub use midly::num::{u4, u7};
 pub use node::Node;
