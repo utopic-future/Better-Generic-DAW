@@ -1,4 +1,4 @@
-use crate::time::BeatRange;
+use crate::time::{BeatRange, BeatTime};
 use std::fmt::{Debug, Display, Formatter};
 use utils::{unique_id, variants};
 
@@ -78,4 +78,22 @@ pub struct MidiNote {
 	pub key: MidiKey,
 	pub velocity: f32,
 	pub position: BeatRange,
+}
+
+
+/// A sparse, note-relative point in an MPE expression curve.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MidiExpressionPoint {
+	/// The time from the note's start.
+	pub position: BeatTime,
+	/// Pitch bend uses -1.0..=1.0; pressure and timbre use 0.0..=1.0.
+	pub value: f32,
+}
+
+/// Per-note MPE expression curves.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MidiNoteExpression {
+	pub pitch_bend: Vec<MidiExpressionPoint>,
+	pub pressure: Vec<MidiExpressionPoint>,
+	pub timbre: Vec<MidiExpressionPoint>,
 }
