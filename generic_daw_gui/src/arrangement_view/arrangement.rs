@@ -1342,7 +1342,6 @@ impl Arrangement {
 				pattern.expression = expression;
 				let mut core = generic_daw_core::MidiPattern::from_notes(&pattern.notes);
 				core.id = id;
-				core.expression = pattern.expression.clone();
 				self.add_midi_pattern(MidiPatternPair {
 					core,
 					gui: pattern,
