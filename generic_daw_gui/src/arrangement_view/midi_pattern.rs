@@ -1,11 +1,15 @@
-use generic_daw_core::{MidiNote, MidiPatternId, Transport, time::BeatTime};
-use std::{path::Path, sync::Arc};
+use generic_daw_core::{
+	MidiExpressionPoint, MidiNote, MidiNoteExpression, MidiNoteId, MidiPatternId, Transport,
+	time::BeatTime,
+};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 #[derive(Clone, Debug)]
 pub struct MidiPattern {
 	pub id: MidiPatternId,
 	pub name: Arc<str>,
 	pub notes: Vec<MidiNote>,
+	pub expression: HashMap<MidiNoteId, MidiNoteExpression>,
 	pub refs: usize,
 }
 
@@ -27,11 +31,20 @@ pub struct MidiPatternPair {
 
 impl MidiPatternPair {
 	pub fn from_notes(notes: Vec<MidiNote>, name: &str) -> Self {
+		Self::from_notes_with_expression(notes, HashMap::new(), name)
+	}
+
+	pub fn from_notes_with_expression(
+		notes: Vec<MidiNote>,
+		expression: HashMap<MidiNoteId, MidiNoteExpression>,
+		name: &str,
+	) -> Self {
 		let core = generic_daw_core::MidiPattern::from_notes(&notes);
 		let gui = MidiPattern {
 			id: core.id,
 			name: name.into(),
 			notes,
+			expression,
 			refs: 0,
 		};
 		Self { core, gui }
